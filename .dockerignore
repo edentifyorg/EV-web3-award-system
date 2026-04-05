@@ -1,0 +1,14 @@
+node_modules
+dist
+.prisma
+.env
+.env.*
+Dockerfile
+docker-compose*
+.git
+.gitignore
+.nyc_output
+.vscode
+test
+coverage
+*.log
