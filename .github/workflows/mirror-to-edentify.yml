@@ -1,5 +1,6 @@
 name: Mirror Repositories
 
+# Mirrors Zentrix main to the EDENTIFY and personal code-only repositories.
 on:
   push:
     branches:
