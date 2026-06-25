@@ -15,7 +15,7 @@ import { ethers } from 'ethers';
 import { processAwardFromCDR, processSpend } from './index';
 import { approveUserForSpendingViaFunding, moveFundsFromManagedWallet, recordSpend, revokeAllowanceOnManagedWallet } from './database/integration';
 import { getManagedWalletAddress, getUserWalletConfig, resolveActiveUidAddress, setUserWalletMode, WalletMode } from './user/userService';
-import { Awards, Spends, Users, Balances } from './database/service';
+import { Awards, Spends, Users, Balances, LinkedWallets } from './database/service';
 import { RawSession, OCPICDRFormat } from './types';
 import { getRules, setRules, AwardRuleConfig } from './config/awardRules';
 import { getOffPeakWindows, setOffPeakWindows } from './config/offPeakWindows';
@@ -97,21 +97,87 @@ function ensureTestUidLookupEnabled(req: Request, res: Response, next: NextFunct
   next();
 }
 
-async function getWalletPayload(normalizedUid: string) {
+function getLinkedWalletSignatureMessage(uid: string, walletAddress: string, action: 'link' | 'unlink'): string {
+  return [
+    `NEVERFLAT ${action} wallet address`,
+    `EMP contract: ${uid}`,
+    `Wallet address: ${ethers.getAddress(walletAddress)}`,
+  ].join('\n');
+}
+
+function verifyLinkedWalletSignature(uid: string, walletAddress: string, action: 'link' | 'unlink', signature?: string): void {
+  if (!signature) {
+    throw new Error('Wallet signature is required');
+  }
+
+  const checksumWalletAddress = ethers.getAddress(walletAddress);
+  const recoveredAddress = ethers.verifyMessage(
+    getLinkedWalletSignatureMessage(uid, checksumWalletAddress, action),
+    signature
+  );
+
+  if (recoveredAddress.toLowerCase() !== checksumWalletAddress.toLowerCase()) {
+    throw new Error(`Signature must be from wallet address ${checksumWalletAddress}`);
+  }
+}
+
+async function getWalletPayload(normalizedUid: string, walletAddressOverride?: string) {
   const walletConfig = await getUserWalletConfig(normalizedUid);
-  const userAddress = walletConfig.walletAddress;
+  const userAddress = walletAddressOverride && ethers.isAddress(walletAddressOverride)
+    ? ethers.getAddress(walletAddressOverride)
+    : walletConfig.walletAddress;
 
   // Get user (if exists)
-  const user = await Users.findByUid(normalizedUid);
+  const user = walletAddressOverride
+    ? await Users.findByUidAndWallet(normalizedUid, userAddress)
+    : await Users.findByUid(normalizedUid);
+  const linkedUsers = await Users.findAllByWallet(userAddress);
+  const contractIds = linkedUsers.length ? linkedUsers.map(u => u.uid) : [normalizedUid];
+  const walletName = linkedUsers.find(u => u.wallet_name)?.wallet_name || null;
+  const linkedWalletRecords = await LinkedWallets.findByUid(normalizedUid);
+  const linkedWalletAddresses = linkedWalletRecords.map(w => w.wallet_address);
+  if (walletAddressOverride) {
+    const allowedWalletAddresses = [
+      walletConfig.walletAddress,
+      walletConfig.managedWalletAddress,
+      ...linkedWalletAddresses,
+    ].map(address => address.toLowerCase());
+
+    if (!allowedWalletAddresses.includes(userAddress.toLowerCase())) {
+      throw new Error('Wallet address is not linked to this EMP contract');
+    }
+  }
+  const linkedWallets = linkedWalletRecords.map(w => ({
+    walletAddress: w.wallet_address,
+    walletName: w.wallet_name || null,
+  }));
+  const linkedWalletNamesByAddress = new Map(
+    linkedWalletRecords.map(w => [w.wallet_address.toLowerCase(), w.wallet_name || null])
+  );
+  const linkedWalletUsers = (await Promise.all(
+    linkedWalletAddresses.map(address => Users.findAllByWallet(address))
+  )).flat();
+
+  let onChainBalance = '0.00';
+  try {
+    onChainBalance = Number(ethers.formatEther(await getOnChainTokenBalance(userAddress))).toFixed(2);
+  } catch (err) {
+    console.warn(`Unable to read on-chain balance for ${userAddress}:`, err instanceof Error ? err.message : String(err));
+  }
+
   if (!user) {
     return {
       status: 'success',
       uid: normalizedUid,
+      contractIds,
+      linkedWalletAddresses,
+      linkedWallets,
+      walletName,
       walletAddress: userAddress,
       managedWalletAddress: getManagedWalletAddress(normalizedUid),
       walletMode: walletConfig.walletMode,
       isRegistered: false,
-      balance: '0',
+      balance: onChainBalance,
       totalAwarded: '0',
       totalSpent: '0',
       treasuryAddress: TREASURY_ADDRESS || null,
@@ -120,22 +186,31 @@ async function getWalletPayload(normalizedUid: string) {
     };
   }
 
-  // Get balance
-  const balance = await Balances.findByUser(user.id);
-  const currentBalance = balance ? balance.balance : '0';
-  const totalAwarded = balance ? balance.total_awarded : '0';
-  const totalSpent = balance ? balance.total_spent : '0';
+  const profileUsers = linkedUsers.length ? linkedUsers : [user];
+  const userIds = profileUsers.map(u => u.id);
+  const activityUsers = [...profileUsers, ...linkedWalletUsers]
+    .filter((candidate, index, all) => all.findIndex(user => user.id === candidate.id) === index);
+  const activityUserIds = activityUsers.map(u => u.id);
 
-  // Get recent transactions (last 20 combined)
-  const awards = await Awards.findByUser(user.id);
-  const spends = await Spends.findByUser(user.id);
+  // Get balance and recent transactions across every contract ID linked to this wallet.
+  const balances = await Promise.all(userIds.map(userId => Balances.findByUser(userId)));
+  const currentBalance = onChainBalance;
+  const totalAwarded = balances.reduce((sum, balance) => sum + Number(balance?.total_awarded || 0), 0).toFixed(2);
+  const totalSpent = balances.reduce((sum, balance) => sum + Number(balance?.total_spent || 0), 0).toFixed(2);
+
+  const awards = (await Promise.all(activityUserIds.map(userId => Awards.findByUser(userId)))).flat();
+  const spends = (await Promise.all(activityUserIds.map(userId => Spends.findByUser(userId)))).flat();
+  const usersById = new Map(activityUsers.map(u => [u.id, u]));
 
   const transactions: Array<{
     type: 'award' | 'spend';
+    uid?: string | null;
     amount: string;
     label: string;
     txHash: string;
     timestamp: Date;
+    walletAddress?: string;
+    walletName?: string | null;
     isOffPeak?: boolean;
     countryCode?: string;
     localTime?: string;
@@ -143,10 +218,13 @@ async function getWalletPayload(normalizedUid: string) {
   }> = [
     ...awards.slice(0, 20).map(a => ({
       type: 'award' as const,
+      uid: usersById.get(a.user_id)?.uid || null,
       amount: a.amount,
       label: a.dedup_key,
       txHash: a.tx_hash,
       timestamp: a.awarded_at,
+      walletAddress: usersById.get(a.user_id)?.wallet_address,
+      walletName: usersById.get(a.user_id)?.wallet_name || null,
       isOffPeak: a.is_off_peak,
       countryCode: a.country_code,
       localTime: a.local_time,
@@ -154,10 +232,13 @@ async function getWalletPayload(normalizedUid: string) {
     })),
     ...spends.slice(0, 20).map(s => ({
       type: 'spend' as const,
+      uid: usersById.get(s.user_id)?.uid || null,
       amount: s.amount,
       label: s.session_id || 'Manual spend',
       txHash: s.tx_hash,
       timestamp: s.created_at,
+      walletAddress: s.wallet_address,
+      walletName: linkedWalletNamesByAddress.get(s.wallet_address.toLowerCase()) || usersById.get(s.user_id)?.wallet_name || null,
     })),
   ]
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -166,6 +247,10 @@ async function getWalletPayload(normalizedUid: string) {
   return {
     status: 'success',
     uid: normalizedUid,
+    contractIds,
+    linkedWalletAddresses,
+    linkedWallets,
+    walletName,
     walletAddress: userAddress,
     managedWalletAddress: walletConfig.managedWalletAddress,
     walletMode: walletConfig.walletMode,
@@ -321,15 +406,7 @@ app.post('/spend', validateApiKey, async (req: Request, res: Response) => {
 
     // Resolve uid to wallet address
     const walletConfig = await getUserWalletConfig(normalizedUid);
-    if (walletConfig.walletMode === 'custodial') {
-      return res.status(400).json({
-        status: 'error',
-        uid: normalizedUid,
-        error: 'This user is using an external wallet. Submit the spend from the connected wallet instead.',
-      });
-    }
-
-    const userAddress = walletConfig.walletAddress;
+    const userAddress = walletConfig.managedWalletAddress;
 
     // Execute spend (first attempt)
     let spendResult = await processSpend(
@@ -416,15 +493,7 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
     }
 
     const walletConfig = await getUserWalletConfig(normalizedUid);
-    if (walletConfig.walletMode === 'custodial') {
-      return res.status(400).json({
-        status: 'error',
-        uid: normalizedUid,
-        error: 'This user is using an external wallet. Submit the spend from the connected wallet instead.',
-      });
-    }
-
-    const userAddress = walletConfig.walletAddress;
+    const userAddress = walletConfig.managedWalletAddress;
 
     let spendResult = await processSpend(
       {
@@ -554,6 +623,198 @@ app.post('/wallet/:uid/mode', validateApiKey, async (req: Request, res: Response
 });
 
 /**
+ * Wallet profile endpoint
+ * PATCH /wallet/:uid/profile
+ *
+ * Saves a user-facing wallet name against the active blockchain address.
+ */
+app.patch('/wallet/:uid/profile', validateApiKey, async (req: Request, res: Response) => {
+  try {
+    const normalizedUid = normalizeUid(req.params.uid || '');
+    const { walletName, walletAddress } = req.body as { walletName?: string | null; walletAddress?: string };
+
+    if (!normalizedUid) {
+      return res.status(400).json({ status: 'error', message: 'Missing wallet ID' });
+    }
+
+    const activeWalletAddress = walletAddress && ethers.isAddress(walletAddress)
+      ? ethers.getAddress(walletAddress)
+      : (await getUserWalletConfig(normalizedUid)).walletAddress;
+
+    await Users.linkContractId(normalizedUid, activeWalletAddress, walletName?.trim() || null);
+    await Users.updateWalletNameByAddress(activeWalletAddress, walletName?.trim() || null);
+    const payload = await getWalletPayload(normalizedUid, activeWalletAddress);
+    return res.status(200).json({
+      ...payload,
+      message: 'Wallet name updated',
+    });
+  } catch (err) {
+    res.status(400).json({
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/**
+ * Link another contract/wallet ID to the same active blockchain address.
+ * POST /wallet/:uid/contract-ids
+ */
+app.post('/wallet/:uid/contract-ids', validateApiKey, async (req: Request, res: Response) => {
+  try {
+    const normalizedUid = normalizeUid(req.params.uid || '');
+    const nextContractId = normalizeUid(String(req.body?.contractId || req.body?.uid || ''));
+    const requestWalletAddress = String(req.body?.walletAddress || '');
+
+    if (!normalizedUid || !nextContractId) {
+      return res.status(400).json({ status: 'error', message: 'Missing wallet ID or contract ID' });
+    }
+
+    const walletConfig = await getUserWalletConfig(normalizedUid);
+    const activeWalletAddress = requestWalletAddress && ethers.isAddress(requestWalletAddress)
+      ? ethers.getAddress(requestWalletAddress)
+      : walletConfig.walletAddress;
+    const existingLinkedUsers = await Users.findAllByWallet(activeWalletAddress);
+    const walletName = existingLinkedUsers.find(u => u.wallet_name)?.wallet_name || null;
+
+    await Users.linkContractId(nextContractId, activeWalletAddress, walletName);
+    if (walletName) {
+      await Users.updateWalletNameByAddress(activeWalletAddress, walletName);
+    }
+
+    const payload = await getWalletPayload(normalizedUid, activeWalletAddress);
+    return res.status(200).json({
+      ...payload,
+      message: 'Contract ID linked to wallet',
+    });
+  } catch (err) {
+    res.status(400).json({
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/**
+ * Link a blockchain wallet address to the current EMP contract.
+ * POST /wallet/:uid/linked-wallets
+ */
+app.post('/wallet/:uid/linked-wallets', validateApiKey, async (req: Request, res: Response) => {
+  try {
+    const normalizedUid = normalizeUid(req.params.uid || '');
+    const walletAddress = String(req.body?.walletAddress || '');
+    const signature = String(req.body?.signature || '');
+
+    if (!normalizedUid) {
+      return res.status(400).json({ status: 'error', message: 'Missing EMP contract number' });
+    }
+
+    if (!walletAddress || !ethers.isAddress(walletAddress)) {
+      return res.status(400).json({ status: 'error', message: 'Missing or invalid wallet address' });
+    }
+
+    const checksumWalletAddress = ethers.getAddress(walletAddress);
+    verifyLinkedWalletSignature(normalizedUid, checksumWalletAddress, 'link', signature);
+
+    await getUserWalletConfig(normalizedUid);
+    await LinkedWallets.add(normalizedUid, checksumWalletAddress);
+    await Users.linkContractId(normalizedUid, checksumWalletAddress);
+
+    const payload = await getWalletPayload(normalizedUid, checksumWalletAddress);
+    return res.status(200).json({
+      ...payload,
+      message: 'Wallet address linked',
+    });
+  } catch (err) {
+    res.status(400).json({
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/**
+ * Name a linked blockchain wallet address.
+ * PATCH /wallet/:uid/linked-wallets/:walletAddress/profile
+ */
+app.patch('/wallet/:uid/linked-wallets/:walletAddress/profile', validateApiKey, async (req: Request, res: Response) => {
+  try {
+    const normalizedUid = normalizeUid(req.params.uid || '');
+    const walletAddress = String(req.params.walletAddress || '');
+    const walletName = typeof req.body?.walletName === 'string' && req.body.walletName.trim()
+      ? req.body.walletName.trim().slice(0, 120)
+      : null;
+
+    if (!normalizedUid) {
+      return res.status(400).json({ status: 'error', message: 'Missing EMP contract number' });
+    }
+
+    if (!walletAddress || !ethers.isAddress(walletAddress)) {
+      return res.status(400).json({ status: 'error', message: 'Missing or invalid wallet address' });
+    }
+
+    const checksumWalletAddress = ethers.getAddress(walletAddress);
+    const updated = await LinkedWallets.updateName(normalizedUid, checksumWalletAddress, walletName);
+    if (!updated) {
+      return res.status(404).json({ status: 'error', message: 'Wallet address is not linked to this EMP contract' });
+    }
+    await Users.linkContractId(normalizedUid, checksumWalletAddress, walletName);
+    await Users.updateWalletNameByAddress(checksumWalletAddress, walletName);
+
+    const payload = await getWalletPayload(normalizedUid, checksumWalletAddress);
+    return res.status(200).json({
+      ...payload,
+      message: walletName ? 'Linked wallet name saved' : 'Linked wallet name cleared',
+    });
+  } catch (err) {
+    res.status(400).json({
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/**
+ * Remove a linked blockchain wallet address from the current EMP contract.
+ * DELETE /wallet/:uid/linked-wallets/:walletAddress
+ */
+app.delete('/wallet/:uid/linked-wallets/:walletAddress', validateApiKey, async (req: Request, res: Response) => {
+  try {
+    const normalizedUid = normalizeUid(req.params.uid || '');
+    const walletAddress = String(req.params.walletAddress || '');
+    const signature = String(req.body?.signature || '');
+
+    if (!normalizedUid) {
+      return res.status(400).json({ status: 'error', message: 'Missing EMP contract number' });
+    }
+
+    if (!walletAddress || !ethers.isAddress(walletAddress)) {
+      return res.status(400).json({ status: 'error', message: 'Missing or invalid wallet address' });
+    }
+
+    const checksumWalletAddress = ethers.getAddress(walletAddress);
+    verifyLinkedWalletSignature(normalizedUid, checksumWalletAddress, 'unlink', signature);
+
+    await LinkedWallets.remove(normalizedUid, checksumWalletAddress);
+    const user = await Users.findByUidAndWallet(normalizedUid, checksumWalletAddress);
+    if (user && !(await Users.hasActivity(user.id))) {
+      await Users.deleteByUidAndWallet(normalizedUid, checksumWalletAddress);
+    }
+
+    const payload = await getWalletPayload(normalizedUid);
+    return res.status(200).json({
+      ...payload,
+      message: 'Wallet address unlinked',
+    });
+  } catch (err) {
+    res.status(400).json({
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/**
  * Move all tokens from the user's managed wallet to a target address.
  * The treasury uses its existing MaxUint256 allowance to execute transferFrom.
  * POST /wallet/:uid/move-funds
@@ -616,18 +877,12 @@ app.post('/spend/custodial-record', validateApiKey, async (req: Request, res: Re
       });
     }
 
-    const walletConfig = await getUserWalletConfig(normalizedUid);
-    if (walletConfig.walletMode !== 'custodial') {
+    const checksumWalletAddress = ethers.getAddress(walletAddress);
+    const linkedWalletAddresses = (await LinkedWallets.findByUid(normalizedUid)).map(w => w.wallet_address.toLowerCase());
+    if (!linkedWalletAddresses.includes(checksumWalletAddress.toLowerCase())) {
       return res.status(400).json({
         status: 'error',
-        message: 'User is not in custodial wallet mode',
-      });
-    }
-
-    if (walletConfig.walletAddress.toLowerCase() !== ethers.getAddress(walletAddress).toLowerCase()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Wallet address does not match the linked custodial wallet',
+        message: 'Wallet address is not linked to this EMP contract',
       });
     }
 
@@ -641,7 +896,7 @@ app.post('/spend/custodial-record', validateApiKey, async (req: Request, res: Re
       });
     }
 
-    await recordSpend(walletConfig.walletAddress, Number(amount), txHash, sessionId, normalizedUid);
+    await recordSpend(checksumWalletAddress, Number(amount), txHash, sessionId, normalizedUid);
     return res.status(200).json({
       status: 'success',
       uid: normalizedUid,
@@ -667,7 +922,8 @@ app.post('/spend/custodial-record', validateApiKey, async (req: Request, res: Re
 app.get('/wallet/:uid', validateApiKey, ensureTestUidLookupEnabled, async (req: Request, res: Response) => {
   try {
     const normalizedUid = normalizeUid(req.params.uid || '');
-    const payload = await getWalletPayload(normalizedUid);
+    const walletAddress = typeof req.query.walletAddress === 'string' ? req.query.walletAddress : '';
+    const payload = await getWalletPayload(normalizedUid, walletAddress);
     return res.status(200).json(payload);
   } catch (err) {
     console.error('Wallet query error:', err);
@@ -692,7 +948,8 @@ app.get('/wallet/me', validateApiKey, async (req: Request, res: Response) => {
       });
     }
 
-    const payload = await getWalletPayload(contractId);
+    const walletAddress = typeof req.query.walletAddress === 'string' ? req.query.walletAddress : '';
+    const payload = await getWalletPayload(contractId, walletAddress);
     return res.status(200).json(payload);
   } catch (err) {
     console.error('Wallet query (me) error:', err);
@@ -713,20 +970,34 @@ app.get('/transactions', validateApiKey, async (req: Request, res: Response) => 
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 500);
     const awards = (await Awards.getAll()).slice(0, limit);
     const spends = (await Spends.getAll()).slice(0, limit);
+    const usersById = new Map((await Users.getAll()).map(user => [user.id, user]));
 
     const transactions = [
-      ...awards.map(a => ({
-        type: 'award',
+      ...awards.map(a => {
+        const user = usersById.get(a.user_id);
+        return {
+        type: 'award' as const,
+        uid: user?.uid || null,
+        walletAddress: user?.wallet_address || null,
+        walletName: user?.wallet_name || null,
         amount: a.amount,
         txHash: a.tx_hash,
         timestamp: a.awarded_at,
-      })),
-      ...spends.map(s => ({
-        type: 'spend',
+        };
+      }),
+      ...spends.map(s => {
+        const user = usersById.get(s.user_id);
+        return {
+        type: 'spend' as const,
+        uid: user?.uid || null,
+        walletAddress: s.wallet_address || user?.wallet_address || null,
+        walletName: user?.wallet_name || null,
         amount: s.amount,
         txHash: s.tx_hash,
+        sessionId: s.session_id || null,
         timestamp: s.created_at,
-      })),
+        };
+      }),
     ]
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       .slice(0, limit);

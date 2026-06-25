@@ -9,6 +9,7 @@ export interface UserRecord {
   id: string;
   uid: string;
   wallet_address: string;
+  wallet_name?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -52,21 +53,38 @@ export interface SpendRecord {
   created_at: Date;
 }
 
+export interface LinkedWalletAddressRecord {
+  id: string;
+  uid: string;
+  wallet_address: string;
+  wallet_name?: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 /**
  * User operations
  */
 export const Users = {
-  async create(uid: string, walletAddress: string): Promise<UserRecord> {
+  async create(uid: string, walletAddress: string, walletName?: string | null): Promise<UserRecord> {
     const db = getDatabase();
     const [record] = await db('users')
-      .insert({ uid, wallet_address: walletAddress })
+      .insert({ uid, wallet_address: walletAddress, wallet_name: walletName || null })
       .returning('*');
     return record;
   },
 
   async findByUid(uid: string): Promise<UserRecord | undefined> {
     const db = getDatabase();
-    return db('users').where({ uid }).first();
+    return db('users').where({ uid }).orderBy('created_at', 'asc').first();
+  },
+
+  async findByUidAndWallet(uid: string, walletAddress: string): Promise<UserRecord | undefined> {
+    const db = getDatabase();
+    return db('users')
+      .where({ uid })
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .first();
   },
 
   async findByWallet(walletAddress: string): Promise<UserRecord | undefined> {
@@ -76,10 +94,21 @@ export const Users = {
       .first();
   },
 
+  async findAllByWallet(walletAddress: string): Promise<UserRecord[]> {
+    const db = getDatabase();
+    return db('users')
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .orderBy('created_at', 'asc');
+  },
+
   async updateWalletAddress(uid: string, walletAddress: string): Promise<UserRecord> {
     const db = getDatabase();
+    const existing = await this.findByUid(uid);
+    if (!existing) {
+      throw new Error(`EMP contract ID "${uid}" not found`);
+    }
     const [record] = await db('users')
-      .where({ uid })
+      .where({ id: existing.id })
       .update({
         wallet_address: walletAddress,
         updated_at: db.fn.now(),
@@ -88,9 +117,130 @@ export const Users = {
     return record;
   },
 
+  async updateWalletAddressById(id: string, walletAddress: string): Promise<UserRecord> {
+    const db = getDatabase();
+    const [record] = await db('users')
+      .where({ id })
+      .update({
+        wallet_address: walletAddress,
+        updated_at: db.fn.now(),
+      })
+      .returning('*');
+    return record;
+  },
+
+  async updateWalletNameByAddress(walletAddress: string, walletName: string | null): Promise<UserRecord[]> {
+    const db = getDatabase();
+    return db('users')
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .update({
+        wallet_name: walletName,
+        updated_at: db.fn.now(),
+      })
+      .returning('*');
+  },
+
+  async linkContractId(uid: string, walletAddress: string, walletName?: string | null): Promise<UserRecord> {
+    const existing = await this.findByUidAndWallet(uid, walletAddress);
+    if (existing) {
+      return existing;
+    }
+    return this.create(uid, walletAddress, walletName || null);
+  },
+
+  async deleteByUidAndWallet(uid: string, walletAddress: string): Promise<number> {
+    const db = getDatabase();
+    return db('users')
+      .where({ uid })
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .delete();
+  },
+
+  async hasActivity(userId: string): Promise<boolean> {
+    const db = getDatabase();
+    const [award, spend, balance] = await Promise.all([
+      db('awards').where({ user_id: userId }).first(),
+      db('spends').where({ user_id: userId }).first(),
+      db('balances').where({ user_id: userId }).whereRaw('balance <> 0').first(),
+    ]);
+    return Boolean(award || spend || balance);
+  },
+
   async getAll(): Promise<UserRecord[]> {
     const db = getDatabase();
     return db('users').orderBy('created_at', 'asc');
+  },
+};
+
+/**
+ * Address-based linked wallets.
+ */
+export const LinkedWallets = {
+  tableName: 'linked_wallet_links',
+  maxPerUid: 5,
+
+  async findByUid(uid: string): Promise<LinkedWalletAddressRecord[]> {
+    const db = getDatabase();
+    return db(this.tableName)
+      .where({ uid })
+      .orderBy('created_at', 'asc');
+  },
+
+  async findByAddress(walletAddress: string): Promise<LinkedWalletAddressRecord | undefined> {
+    const db = getDatabase();
+    return db(this.tableName)
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .first();
+  },
+
+  async add(uid: string, walletAddress: string): Promise<LinkedWalletAddressRecord> {
+    const db = getDatabase();
+    const existingForUid = await db(this.tableName)
+      .where({ uid })
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .first();
+
+    if (existingForUid) return existingForUid;
+
+    const existingForOtherUid = await this.findByAddress(walletAddress);
+    if (existingForOtherUid) {
+      throw new Error('This wallet address is already linked. Unlink it before linking it again.');
+    }
+
+    const count = await db(this.tableName)
+      .where({ uid })
+      .count<{ count: string }>({ count: '*' })
+      .first();
+
+    if (Number(count?.count || 0) >= this.maxPerUid) {
+      throw new Error(`A maximum of ${this.maxPerUid} wallet addresses can be linked`);
+    }
+
+    const [record] = await db(this.tableName)
+      .insert({ uid, wallet_address: walletAddress })
+      .returning('*');
+    return record;
+  },
+
+  async remove(uid: string, walletAddress: string): Promise<number> {
+    const db = getDatabase();
+    return db(this.tableName)
+      .where({ uid })
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .delete();
+  },
+
+  async updateName(uid: string, walletAddress: string, walletName: string | null): Promise<LinkedWalletAddressRecord | undefined> {
+    const db = getDatabase();
+    const [record] = await db(this.tableName)
+      .where({ uid })
+      .whereRaw('lower(wallet_address) = lower(?)', [walletAddress])
+      .update({
+        wallet_name: walletName,
+        updated_at: db.fn.now(),
+      })
+      .returning('*');
+    return record;
   },
 };
 

@@ -91,7 +91,7 @@ export function normaliseSession(raw: RawSession | OCPICDRFormat): NormalisedSes
         : 'DISCHARGE';
   const energyKWh = Math.abs(rawEnergyValue);
 
-  const normalised: NormalisedSession = {
+  return {
     sessionId: sessionId.toString(),
     providerId: providerId.toString(),
     uid: uid.toString(),
@@ -101,6 +101,4 @@ export function normaliseSession(raw: RawSession | OCPICDRFormat): NormalisedSes
     energyKWh,
     energyDirection,
   };
-
-  return normalised;
 }

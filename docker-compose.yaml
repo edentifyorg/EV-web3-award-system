@@ -11,6 +11,11 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nvf_award"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - default
 
@@ -24,8 +29,11 @@ services:
       - '127.0.0.1:3005:3000'
     environment:
       NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/nvf_award
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - default
       - shared-proxy

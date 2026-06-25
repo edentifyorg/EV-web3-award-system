@@ -53,6 +53,76 @@ async function runMigrations() {
       console.log('[Migration] ✓ 003: award_type column already exists');
     }
 
+
+    // Migration 004: add wallet profile fields
+    const hasWalletName = await db.schema.hasColumn('users', 'wallet_name');
+    if (!hasWalletName) {
+      const { up } = await import('./migrations/004_add_wallet_profiles');
+      await up(db);
+      console.log('[Migration] ✓ 004: Added wallet profile fields');
+    } else {
+      console.log('[Migration] ✓ 004: Wallet profile fields already exist');
+    }
+
+    // Migration 005: EMP contract IDs are globally unique.
+    const hasGlobalContractIdUniqueness = await db('pg_constraint')
+      .where({ conname: 'users_uid_unique' })
+      .first();
+    if (!hasGlobalContractIdUniqueness) {
+      const { up } = await import('./migrations/005_scope_wallet_ids_to_wallet_address');
+      await up(db);
+      console.log('[Migration] ✓ 005: Enforced global EMP contract ID uniqueness');
+    } else {
+      console.log('[Migration] ✓ 005: EMP contract IDs already globally unique');
+    }
+
+    // Migration 006: add address-based linked wallets.
+    const hasLinkedWalletAddresses = await db.schema.hasTable('linked_wallet_links');
+    if (!hasLinkedWalletAddresses) {
+      const { up } = await import('./migrations/006_add_linked_wallet_addresses');
+      await up(db);
+      console.log('[Migration] 006: Added linked wallet addresses');
+    } else {
+      console.log('[Migration] 006: Linked wallet links already exist');
+    }
+    const hasLinkedWalletName = await db.schema.hasColumn('linked_wallet_links', 'wallet_name');
+    if (!hasLinkedWalletName) {
+      await db.schema.alterTable('linked_wallet_links', (table) => {
+        table.string('wallet_name', 120).nullable();
+      });
+      console.log('[Migration] 006: Added linked wallet name column');
+    }
+
+    // Migration 007: each blockchain address can only be linked once.
+    const hasUniqueLinkedWalletAddress = await db.raw(`
+      select 1
+      from pg_indexes
+      where indexname = 'linked_wallet_links_wallet_lower_unique'
+      limit 1
+    `);
+    if (!hasUniqueLinkedWalletAddress.rows.length) {
+      const { up } = await import('./migrations/007_enforce_unique_linked_wallet_addresses');
+      await up(db);
+      console.log('[Migration] 007: Enforced unique linked wallet addresses');
+    } else {
+      console.log('[Migration] 007: Linked wallet addresses already unique');
+    }
+
+    // Migration 008: allow an EMP contract to be associated with multiple wallet addresses.
+    const hasUidWalletUniqueness = await db.raw(`
+      select 1
+      from pg_indexes
+      where indexname = 'users_uid_wallet_lower_unique'
+      limit 1
+    `);
+    if (!hasUidWalletUniqueness.rows.length) {
+      const { up } = await import('./migrations/008_allow_uid_per_wallet');
+      await up(db);
+      console.log('[Migration] 008: Scoped EMP contract uniqueness to wallet address');
+    } else {
+      console.log('[Migration] 008: EMP contract plus wallet uniqueness already enforced');
+    }
+
     console.log('[Migration] All migrations completed successfully');
   } catch (err) {
     console.error('[Migration] Error:', err);

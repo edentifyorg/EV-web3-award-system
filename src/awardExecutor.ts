@@ -23,6 +23,22 @@ export interface ExecutionResult {
   stage: 'normalisation' | 'calculation' | 'validation' | 'execution' | 'complete';
 }
 
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function failedExecutionResult(overrides: Partial<ExecutionResult>): ExecutionResult {
+  return {
+    success: false,
+    dedupKey: '',
+    eligible: false,
+    amount: 0,
+    uid: '',
+    stage: 'normalisation',
+    ...overrides,
+  };
+}
+
 /**
  * Evaluates reward eligibility and prepares award execution based on rules configuration.
  * Returns details for treasury → user transfer if eligible.
@@ -95,15 +111,10 @@ export async function processAwardFromCDR(
     try {
       normalised = normaliseSession(rawCDR);
     } catch (err) {
-      return {
-        success: false,
-        dedupKey: '',
-        eligible: false,
-        amount: 0,
-        uid: '',
-        error: `Normalisation failed: ${err instanceof Error ? err.message : String(err)}`,
+      return failedExecutionResult({
+        error: `Normalisation failed: ${getErrorMessage(err)}`,
         stage: 'normalisation',
-      };
+      });
     }
 
     // Stage 2: Calculate and prepare
@@ -111,15 +122,12 @@ export async function processAwardFromCDR(
     try {
       awardResult = prepareAward(normalised);
     } catch (err) {
-      return {
-        success: false,
+      return failedExecutionResult({
         dedupKey: normalised.uid ? `${normalised.sessionId}-${normalised.providerId}` : '',
-        eligible: false,
-        amount: 0,
         uid: normalised.uid,
-        error: `Calculation failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Calculation failed: ${getErrorMessage(err)}`,
         stage: 'calculation',
-      };
+      });
     }
 
     // Stage 3: Validate (check idempotency if checker provided)
@@ -127,26 +135,24 @@ export async function processAwardFromCDR(
       try {
         const alreadyProcessed = await deduplicationCheck(awardResult.dedupKey);
         if (alreadyProcessed) {
-          return {
-            success: false,
+          return failedExecutionResult({
             dedupKey: awardResult.dedupKey,
             eligible: awardResult.eligible,
             amount: awardResult.amount,
             uid: awardResult.uid,
             error: 'Session already processed (deduplication)',
             stage: 'validation',
-          };
+          });
         }
       } catch (err) {
-        return {
-          success: false,
+        return failedExecutionResult({
           dedupKey: awardResult.dedupKey,
           eligible: awardResult.eligible,
           amount: awardResult.amount,
           uid: awardResult.uid,
-          error: `Deduplication check failed: ${err instanceof Error ? err.message : String(err)}`,
+          error: `Deduplication check failed: ${getErrorMessage(err)}`,
           stage: 'validation',
-        };
+        });
       }
     }
 
@@ -170,15 +176,14 @@ export async function processAwardFromCDR(
       userWalletAddress = walletConfig.walletAddress;
       walletMode = walletConfig.walletMode;
     } catch (err) {
-      return {
-        success: false,
+      return failedExecutionResult({
         dedupKey: awardResult.dedupKey,
         eligible: true,
         amount: awardResult.amount,
         uid: awardResult.uid,
-        error: `Address resolution failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Address resolution failed: ${getErrorMessage(err)}`,
         stage: 'validation',
-      };
+      });
     }
 
     // Stage 5: Execute on-chain (required)
@@ -212,7 +217,7 @@ export async function processAwardFromCDR(
           })();
         }
       } catch (err) {
-        dbError = err instanceof Error ? err.message : String(err);
+        dbError = getErrorMessage(err);
       }
 
       return {
@@ -227,25 +232,19 @@ export async function processAwardFromCDR(
         stage: 'complete',
       };
     } catch (err) {
-      return {
-        success: false,
+      return failedExecutionResult({
         dedupKey: awardResult.dedupKey,
         eligible: awardResult.eligible,
         amount: awardResult.amount,
         uid: awardResult.uid,
-        error: `On-chain execution failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: `On-chain execution failed: ${getErrorMessage(err)}`,
         stage: 'execution',
-      };
+      });
     }
   } catch (err) {
-    return {
-      success: false,
-      dedupKey: '',
-      eligible: false,
-      amount: 0,
-      uid: '',
-      error: `Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
+    return failedExecutionResult({
+      error: `Unexpected error: ${getErrorMessage(err)}`,
       stage: 'normalisation',
-    };
+    });
   }
 }

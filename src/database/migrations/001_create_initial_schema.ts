@@ -4,7 +4,7 @@ export async function up(knex: Knex): Promise<void> {
   // Users table: maps UID to Polygon wallet address
   await knex.schema.createTable('users', (table) => {
     table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
-    table.string('uid').notNullable().unique().index(); // User identifier
+    table.string('uid').notNullable().unique().index(); // EMP contract ID
     table.string('wallet_address', 42).notNullable().index(); // Polygon address 0x...
     table.timestamp('created_at').notNullable().defaultTo(knex.fn.now());
     table.timestamp('updated_at').notNullable().defaultTo(knex.fn.now());

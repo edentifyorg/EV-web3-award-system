@@ -205,8 +205,11 @@ Get recent transactions across all users (default: 50, max: 500).
   "transactions": [
     {
       "type": "spend",
+      "uid": "user-123",
+      "walletAddress": "0x1234567890123456789012345678901234567890",
       "amount": "5.00",
       "txHash": "0x...",
+      "sessionId": "spend-001",
       "timestamp": "2026-04-16T10:30:00.000Z"
     }
   ]

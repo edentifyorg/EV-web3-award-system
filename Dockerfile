@@ -12,17 +12,6 @@ COPY .env.example ./
 
 RUN npm run build
 
-# Build frontend
-FROM node:20-alpine AS frontend-build
-
-WORKDIR /usr/src/app/frontend
-
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install
-
-COPY frontend/ ./
-RUN npm run build
-
 FROM node:20-alpine AS runtime
 WORKDIR /usr/src/app
 
@@ -31,8 +20,7 @@ RUN npm ci --production
 
 COPY --from=build /usr/src/app/dist ./dist
 COPY .env.example ./
-COPY --from=frontend-build /usr/src/app/frontend/dist ./frontend/dist
 
 EXPOSE 3000
 
-CMD ["node", "dist/api.js"]
+CMD ["sh", "-c", "node dist/database/migrate.js && node dist/api.js"]

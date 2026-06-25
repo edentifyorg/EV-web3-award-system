@@ -15,12 +15,10 @@ import { recordSpend } from './database/integration';
  * Returns details for user → treasury transfer if valid.
  */
 export function prepareSpend(request: SpendRequest): SpendResult {
-  const valid = !!(request.amount > 0 && request.userAddress);
-
   // Additional validations can be added here (e.g., balance checks)
 
   return {
-    valid,
+    valid: !!(request.amount > 0 && request.userAddress),
   };
 }
 

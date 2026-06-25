@@ -72,16 +72,17 @@ function parseTimeToMinutes(time: string): number {
  */
 export function getAwardType(session: NormalisedSession, rules: AwardRuleConfig = getRules()): 'OFF_PEAK_CHARGING' | 'V2G_DISCHARGE' | null {
   const country = getCountryFromEVSEID(session.evseId);
+  const { offPeakCharging, v2gDischarge } = rules.rules;
 
   // Check for off-peak charging first
-  if (rules.rules.offPeakCharging.enabled && session.energyDirection === 'CHARGE') {
+  if (offPeakCharging.enabled && session.energyDirection === 'CHARGE') {
     if (isOffPeak(country, session.startTime)) {
       return 'OFF_PEAK_CHARGING';
     }
   }
 
   // Check for V2G discharge
-  if (rules.rules.v2gDischarge.enabled && session.energyDirection === 'DISCHARGE') {
+  if (v2gDischarge.enabled && session.energyDirection === 'DISCHARGE') {
     return 'V2G_DISCHARGE';
   }
 
@@ -93,21 +94,22 @@ export function getAwardType(session: NormalisedSession, rules: AwardRuleConfig 
  */
 export function calculateAwardTokens(session: NormalisedSession, rules: AwardRuleConfig = getRules()): number {
   let totalTokens = 0;
+  const { offPeakCharging, v2gDischarge } = rules.rules;
 
   // Derive country from EVSEID
   const country = getCountryFromEVSEID(session.evseId);
 
   // Off-peak charging reward
-  if (rules.rules.offPeakCharging.enabled && session.energyDirection === 'CHARGE') {
+  if (offPeakCharging.enabled && session.energyDirection === 'CHARGE') {
     if (isOffPeak(country, session.startTime)) {
-      const offPeakTokens = Math.floor(session.energyKWh * rules.rules.offPeakCharging.tokensPerKWh);
+      const offPeakTokens = Math.floor(session.energyKWh * offPeakCharging.tokensPerKWh);
       totalTokens += offPeakTokens;
     }
   }
 
   // V2G discharge reward
-  if (rules.rules.v2gDischarge.enabled && session.energyDirection === 'DISCHARGE') {
-    const dischargeTokens = Math.floor(session.energyKWh * rules.rules.v2gDischarge.tokensPerKWh);
+  if (v2gDischarge.enabled && session.energyDirection === 'DISCHARGE') {
+    const dischargeTokens = Math.floor(session.energyKWh * v2gDischarge.tokensPerKWh);
     totalTokens += dischargeTokens;
   }
 
@@ -118,9 +120,12 @@ export function calculateAwardTokens(session: NormalisedSession, rules: AwardRul
  * Gets the deduplication key for idempotency checking
  */
 export function getDeduplicationKey(session: NormalisedSession, rules: AwardRuleConfig = getRules()): string {
+  const valuesByKey: Record<string, string> = {
+    sessionId: session.sessionId,
+    providerId: session.providerId,
+  };
   const keyParts = rules.idempotency.deduplicationKey.map(key => {
-    if (key === 'sessionId') return session.sessionId;
-    if (key === 'providerId') return session.providerId;
+    if (key in valuesByKey) return valuesByKey[key];
     throw new Error(`Unknown deduplication key: ${key}`);
   });
   return keyParts.join('-');
@@ -149,7 +154,6 @@ export function isOffPeakForCountry(country: string, timestamp: Date): boolean {
  * @returns Time string in HH:MM format
  */
 export function formatLocalTime(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
+  const padTimePart = (value: number) => String(value).padStart(2, '0');
+  return `${padTimePart(date.getHours())}:${padTimePart(date.getMinutes())}`;
 }
