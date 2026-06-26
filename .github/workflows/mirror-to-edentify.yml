@@ -11,7 +11,7 @@ jobs:
     name: Mirror main to code-only repositories
     runs-on: ubuntu-latest
     env:
-      PERSONAL_MIRROR_PAT: ${{ secrets.DUNCS_GITHUB_PAT }}
+      PERSONAL_MIRROR_PAT: ${{ secrets.PERSONAL_NVF_PAT }}
 
     steps:
       - name: Checkout Zentrix repository
