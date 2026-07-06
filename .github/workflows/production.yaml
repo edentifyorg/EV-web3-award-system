@@ -54,15 +54,34 @@ jobs:
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
           command_timeout: 10m
+          envs: ADMIN_EMAIL,ADMIN_PASSWORD
           script: |
             set -euo pipefail
             cd /root/neverflat
             echo ${{ github.token }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker network create shared-proxy || true
+            touch .env
+            python3 - <<'PY'
+            import os
+            from pathlib import Path
+
+            path = Path('.env')
+            updates = {
+                'ADMIN_EMAIL': os.environ['ADMIN_EMAIL'],
+                'ADMIN_PASSWORD': os.environ['ADMIN_PASSWORD'],
+            }
+            lines = path.read_text().splitlines() if path.exists() else []
+            kept = [line for line in lines if not any(line.startswith(f'{key}=') for key in updates)]
+            kept.extend(f'{key}={value}' for key, value in updates.items())
+            path.write_text('\n'.join(kept) + '\n')
+            PY
             docker compose pull app
             docker compose up -d
