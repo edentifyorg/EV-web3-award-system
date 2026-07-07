@@ -60,12 +60,27 @@ const treasuryWallet = ethers.Wallet.createRandom();
 jest.mock('./database/service', () => ({
   Awards: { exists: jest.fn() },
   Spends: { findByTxHash: jest.fn() },
-  Users: {},
-  Balances: {},
+  Users: {
+    findByUid: jest.fn().mockResolvedValue(undefined),
+    findByUidAndWallet: jest.fn().mockResolvedValue(undefined),
+    findAllByWallet: jest.fn().mockResolvedValue([]),
+    linkContractId: jest.fn(),
+    updateWalletNameByAddress: jest.fn(),
+    hasActivity: jest.fn().mockResolvedValue(false),
+    deleteByUidAndWallet: jest.fn(),
+  },
+  Balances: {
+    findByUser: jest.fn().mockResolvedValue(undefined),
+  },
   LinkedWallets: {
     findByUid: jest.fn().mockResolvedValue([{ wallet_address: linkedWallet.address }]),
+    add: jest.fn(),
+    updateName: jest.fn(),
+    remove: jest.fn(),
   },
-  SpendReceipts: {},
+  SpendReceipts: {
+    create: jest.fn(),
+  },
   AuditLogs: mockAuditLogs,
   ReconciliationReports: {
     latest: jest.fn().mockResolvedValue(undefined),
@@ -265,6 +280,115 @@ describe('api integration contracts', () => {
       },
     });
     expect(mockAuditLogs.getSince).toHaveBeenCalled();
+  });
+
+  it('returns session spend prompt state without spending tokens', async () => {
+    const res = await apiFetch('/spend/session', {
+      method: 'POST',
+      headers: { 'x-contract-id': 'contract-session-1' },
+      body: JSON.stringify({
+        sessionId: 'session-1',
+        providerId: 'NF',
+        chargerId: 'charger-001',
+        status: 'PLUGGED_IN',
+      }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({
+      status: 'success',
+      contractId: 'contract-session-1',
+      sessionId: 'session-1',
+      providerId: 'NF',
+      chargerId: 'charger-001',
+      sessionStatus: 'PLUGGED_IN',
+      wallet: {
+        availableBalance: 0,
+        totalEarned: 0,
+        totalSpent: 0,
+        mode: 'managed',
+      },
+      spend: {
+        eligible: false,
+        maxSpendable: 0,
+        suggestedAmount: 0,
+        label: 'Charging discount',
+      },
+    });
+    expect(body.spend.message).toContain('No SPARKZ');
+    expect(body.rewardRates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'offPeakCharging',
+        label: 'Off-peak charging',
+        enabled: true,
+        tokensPerKWh: 0.25,
+        kWhPerSparkz: 4,
+      }),
+      expect.objectContaining({
+        key: 'v2gDischarge',
+        label: 'V2G discharge',
+        enabled: true,
+        tokensPerKWh: 1,
+        kWhPerSparkz: 1,
+      }),
+    ]));
+  });
+
+  it('rejects invalid session spend prompt payloads', async () => {
+    const res = await apiFetch('/spend/session', {
+      method: 'POST',
+      headers: { 'x-contract-id': 'contract-session-1' },
+      body: JSON.stringify({
+        sessionId: 'session-1',
+        providerId: 'NF',
+        chargerId: 'charger-001',
+        status: 'ENDED',
+      }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toMatchObject({
+      status: 'error',
+      code: 'INVALID_SESSION_STATUS',
+    });
+  });
+
+  it('returns explicit validation codes for spend identity requests', async () => {
+    const missingSession = await apiFetch('/spend/me', {
+      method: 'POST',
+      headers: { 'x-contract-id': 'contract-1' },
+      body: JSON.stringify({
+        providerId: 'NF',
+        amount: 1,
+      }),
+    });
+    expect(missingSession.status).toBe(400);
+    await expect(missingSession.json()).resolves.toMatchObject({ code: 'MISSING_SESSION_ID' });
+
+    const missingProvider = await apiFetch('/spend/me', {
+      method: 'POST',
+      headers: { 'x-contract-id': 'contract-1' },
+      body: JSON.stringify({
+        sessionId: 'session-1',
+        amount: 1,
+      }),
+    });
+    expect(missingProvider.status).toBe(400);
+    await expect(missingProvider.json()).resolves.toMatchObject({ code: 'MISSING_PROVIDER_ID' });
+
+    const invalidAmount = await apiFetch('/spend/me', {
+      method: 'POST',
+      headers: { 'x-contract-id': 'contract-1' },
+      body: JSON.stringify({
+        sessionId: 'session-1',
+        providerId: 'NF',
+        amount: 0,
+      }),
+    });
+    expect(invalidAmount.status).toBe(400);
+    await expect(invalidAmount.json()).resolves.toMatchObject({ code: 'INVALID_AMOUNT' });
   });
 
   it('builds a retryable custodial spend intent', async () => {

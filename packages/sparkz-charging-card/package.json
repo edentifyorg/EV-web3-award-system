@@ -1,0 +1,41 @@
+{
+  "name": "@neverflat/sparkz-charging-card",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Embeddable SPARKZ charging-session and wallet account React component for BEIA integration.",
+  "type": "module",
+  "main": "./dist/sparkz-charging-card.umd.cjs",
+  "module": "./dist/sparkz-charging-card.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/sparkz-charging-card.js",
+      "require": "./dist/sparkz-charging-card.umd.cjs"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {
+    "ethers": "^6.16.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "typescript": "^4.9.5",
+    "vite": "^8.0.9"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  }
+}

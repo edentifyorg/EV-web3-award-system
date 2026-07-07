@@ -158,6 +158,86 @@ Note: the CDR payload uses `UID` as a legacy key name. Provide your contract ID 
 
 ---
 
+### Session Spend Prompt
+
+**POST** `/spend/session`
+
+Returns SPARKZ wallet/session spend eligibility for a charging-session prompt.
+This endpoint **does not spend tokens** and does not create a spend receipt.
+
+Required header:
+- `x-contract-id: <contract-id>` (or the header name configured in `USER_IDENTITY_HEADER`)
+
+**Request:**
+```json
+{
+  "sessionId": "spend-001",
+  "providerId": "NF",
+  "chargerId": "charger-001",
+  "status": "PLUGGED_IN",
+  "countryCode": "GB",
+  "estimatedKwh": 12.5,
+  "estimatedCost": 8.4
+}
+```
+
+`status` must be one of:
+- `CHARGER_OPENED`
+- `PLUGGED_IN`
+- `SESSION_STARTED`
+
+**Response:**
+```json
+{
+  "status": "success",
+  "contractId": "000",
+  "sessionId": "spend-001",
+  "providerId": "NF",
+  "chargerId": "charger-001",
+  "sessionStatus": "PLUGGED_IN",
+  "countryCode": "GB",
+  "estimatedKwh": 12.5,
+  "estimatedCost": 8.4,
+  "wallet": {
+    "availableBalance": 12.4,
+    "totalEarned": 20,
+    "totalSpent": 7.6,
+    "mode": "managed"
+  },
+  "spend": {
+    "eligible": true,
+    "maxSpendable": 12.4,
+    "suggestedAmount": 8.4,
+    "label": "Charging discount",
+    "message": "You have 12.40 SPARKZ available"
+  },
+  "recentActivity": [],
+  "rewardRates": [
+    {
+      "key": "offPeakCharging",
+      "label": "Off-peak charging",
+      "enabled": true,
+      "tokensPerKWh": 0.25,
+      "kWhPerSparkz": 4,
+      "description": "1 SPARKZ per 4 kWh"
+    },
+    {
+      "key": "v2gDischarge",
+      "label": "V2G discharge",
+      "enabled": true,
+      "tokensPerKWh": 1,
+      "kWhPerSparkz": 1,
+      "description": "1 SPARKZ per 1 kWh"
+    }
+  ]
+}
+```
+
+Validation errors include `MISSING_REQUIRED_FIELDS`, `INVALID_SESSION_STATUS`,
+`INVALID_ESTIMATED_KWH`, and `INVALID_ESTIMATED_COST`.
+
+---
+
 ### Spend Tokens
 
 **POST** `/spend`
@@ -392,6 +472,31 @@ Returns wallet details for the authenticated/forwarded user identity.
 Required header:
 - `x-contract-id: <contract-id>` (or the header name configured in `USER_IDENTITY_HEADER`)
 
+Response:
+```json
+{
+  "status": "success",
+  "uid": "user-123",
+  "contractIds": ["user-123"],
+  "linkedWalletAddresses": [],
+  "linkedWallets": [],
+  "walletName": null,
+  "walletAddress": "0x...",
+  "managedWalletAddress": "0x...",
+  "walletMode": "managed",
+  "isRegistered": true,
+  "balance": "12.40",
+  "totalAwarded": "20.00",
+  "totalSpent": "7.60",
+  "treasuryAddress": "0x...",
+  "tokenContractAddress": "0x...",
+  "history": []
+}
+```
+
+BEIA should call this with the logged-in app user's UID as `x-contract-id`.
+The SPARKZ React package uses this endpoint for the unplugged/account view.
+
 ---
 
 ### Spend Tokens (Identity Context)
@@ -399,6 +504,8 @@ Required header:
 **POST** `/spend/me`
 
 Spends from the authenticated/forwarded user's wallet without passing `uid` in the body.
+Successful responses include the same signed `spendReceipt` shape returned by
+`POST /spend`.
 
 Required header:
 - `x-contract-id: <contract-id>` (or the header name configured in `USER_IDENTITY_HEADER`)
@@ -412,6 +519,72 @@ Request example:
   "label": "Charging discount"
 }
 ```
+
+---
+
+### Link Browser Wallet For Custodial Mode
+
+**POST** `/wallet/:uid/linked-wallets`
+
+Links an external blockchain wallet to the contract ID after the user signs a
+message in an installed wallet such as MetaMask or Rabby.
+
+Route parameter:
+- `:uid` is the contract ID value.
+
+Request:
+```json
+{
+  "walletAddress": "0x...",
+  "signature": "0x..."
+}
+```
+
+The signature must recover to `walletAddress` over this exact message:
+
+```text
+NEVERFLAT link wallet address
+EMP contract: <contractId>
+Wallet address: <checksumWalletAddress>
+```
+
+Response is the wallet payload from `/wallet/me`, focused on the linked wallet.
+
+---
+
+### Switch Wallet Mode
+
+**POST** `/wallet/:uid/mode`
+
+Switches the active wallet mode between the deterministic NEVERFLAT managed
+wallet and a signed/linked custodial wallet.
+
+Route parameter:
+- `:uid` is the contract ID value.
+
+Request for managed mode:
+```json
+{
+  "mode": "managed"
+}
+```
+
+Request for custodial mode:
+```json
+{
+  "mode": "custodial",
+  "walletAddress": "0x...",
+  "allowSplit": true
+}
+```
+
+Important: BEIA/frontends must not switch to custodial mode based on a typed
+address alone. First request a wallet signature and link the address using
+`POST /wallet/:uid/linked-wallets`, then call this endpoint.
+
+If `allowSplit` is omitted and the source wallet has a balance, the endpoint can
+return `409 SOURCE_WALLET_HAS_BALANCE` so the UI can ask whether to move funds
+or continue with balances split across wallets.
 
 ---
 
@@ -633,6 +806,43 @@ Admin alert delivery:
   ]
 }
 ```
+
+Validation errors include:
+- `MISSING_SESSION_ID`
+- `MISSING_PROVIDER_ID`
+- `INVALID_AMOUNT`
+- `INSUFFICIENT_SPARKZ`
+
+Successful response:
+```json
+{
+  "status": "success",
+  "uid": "user-123",
+  "sessionId": "spend-001",
+  "providerId": "prov-DE",
+  "tokensSpent": 5,
+  "txHash": "0x...",
+  "timestamp": "2026-04-16T10:30:00.000Z",
+  "label": "Charging discount",
+  "spendReceipt": {
+    "payload": {
+      "receiptId": "spr_...",
+      "status": "settled",
+      "contractId": "user-123",
+      "amount": "5",
+      "tokenTxHash": "0x..."
+    },
+    "signature": "0x...",
+    "signerAddress": "0x...",
+    "canonicalPayload": "{\"amount\":\"5\",...}",
+    "dbStored": true
+  }
+}
+```
+
+OpenAPI/Swagger note: the live Swagger spec is embedded in `src/api.ts` and is
+served by the API at `/openapi.json`, `/api-docs`, and `/docs`. Keep this
+document and the embedded spec in sync when endpoints change.
 
 ---
 

@@ -453,119 +453,6 @@ button:disabled {
   word-break: break-word;
 }
 
-/* ── Mode picker ──────────────────────────────────── */
-.mode-picker-shell {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg);
-  padding: 2rem;
-}
-
-.mode-picker-card {
-  width: 100%;
-  max-width: 480px;
-  display: flex;
-  flex-direction: column;
-  gap: 1.7rem;
-}
-
-.brand-lockup--centered {
-  justify-content: center;
-  text-align: left;
-}
-
-.mode-picker-logos {
-  display: grid;
-  justify-items: center;
-  gap: 0.85rem;
-}
-
-.mode-picker-logo {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  object-fit: contain;
-}
-
-.mode-picker-logo--sparkz {
-  width: min(280px, 82vw);
-}
-
-.mode-picker-logo--neverflat {
-  width: min(680px, 96vw);
-}
-
-.brand-glyph--lg {
-  width: 52px;
-  height: 52px;
-  font-size: 1.6rem;
-}
-
-.mode-options {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.mode-btn {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  text-align: left;
-  padding: 1.1rem 1.2rem;
-  border-radius: 14px;
-  border: 1px solid var(--line);
-  background: rgba(20, 69, 210, 0.08);
-  color: var(--brand-dark);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-  width: 100%;
-}
-
-.mode-btn:hover {
-  background: rgba(20, 69, 210, 0.14);
-  border-color: rgba(20, 69, 210, 0.24);
-}
-
-.mode-btn--admin {
-  border-color: rgba(20, 69, 210, 0.35);
-}
-
-.mode-btn--admin:hover {
-  border-color: rgba(20, 69, 210, 0.8);
-  background: rgba(20, 69, 210, 0.14);
-}
-
-.mode-btn__title {
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.mode-btn__desc {
-  font-size: 0.82rem;
-  color: var(--text-subtle);
-}
-
-.mode-toggle {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-}
-
-.mode-chip {
-  background: #eef4ff;
-  color: var(--brand-dark);
-  border: 1px solid rgba(20, 69, 210, 0.16);
-}
-
-.mode-chip--active {
-  background: var(--brand-primary);
-  color: #ffffff;
-  border-color: var(--brand-primary);
-}
-
 .wallet-connection,
 .wallet-summary {
   display: grid;
@@ -1386,12 +1273,6 @@ button:disabled {
     flex: 0 0 38px;
   }
 
-  .brand-glyph--lg {
-    width: 48px;
-    height: 48px;
-    flex-basis: 48px;
-  }
-
   .brand-lockup h1,
   .hero-card h2 {
     overflow-wrap: anywhere;
@@ -1439,25 +1320,6 @@ button:disabled {
   .back-btn--bottom-left {
     left: 1rem;
     bottom: 1rem;
-  }
-
-  .mode-picker-shell {
-    align-items: stretch;
-    padding: 1rem;
-  }
-
-  .mode-picker-card {
-    justify-content: center;
-    gap: 1.25rem;
-  }
-
-  .mode-btn {
-    border-radius: 8px;
-    padding: 0.95rem 1rem;
-  }
-
-  .mode-toggle {
-    grid-template-columns: 1fr;
   }
 
   .rail-tab-nav {

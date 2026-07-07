@@ -1,0 +1,326 @@
+.sparkz-card {
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid #dbe5f7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  box-shadow: 0 12px 30px rgba(15, 35, 80, 0.08);
+}
+
+.sparkz-card *,
+.sparkz-card *::before,
+.sparkz-card *::after {
+  box-sizing: border-box;
+}
+
+.sparkz-card__header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem;
+}
+
+.sparkz-card__brand {
+  display: flex;
+  align-items: center;
+}
+
+.sparkz-card__headline {
+  grid-column: 1 / -1;
+}
+
+.sparkz-card__logo-image {
+  display: block;
+  width: auto;
+  max-width: 8.5rem;
+  height: 2rem;
+  object-fit: contain;
+}
+
+.sparkz-card__muted,
+.sparkz-card__notice p,
+.sparkz-card__activity-row span,
+.sparkz-card__activity-row a,
+.sparkz-card__about p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.84rem;
+}
+
+.sparkz-card h2,
+.sparkz-card h3 {
+  margin: 0;
+  line-height: 1.15;
+}
+
+.sparkz-card h2 {
+  margin-top: 0.25rem;
+  font-size: 1.25rem;
+}
+
+.sparkz-card h3 {
+  font-size: 0.95rem;
+}
+
+.sparkz-card__pill {
+  flex: 0 0 auto;
+  max-width: 9rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 999px;
+  background: #edf4ff;
+  color: #144cdd;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.sparkz-card__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.sparkz-card__stats--session {
+  grid-template-columns: 1fr;
+}
+
+.sparkz-card__stats div,
+.sparkz-card__receipt,
+.sparkz-card__activity,
+.sparkz-card__rates {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.sparkz-card__stats span,
+.sparkz-card__receipt span {
+  color: #64748b;
+  font-size: 0.74rem;
+}
+
+.sparkz-card__stats strong {
+  font-size: 1rem;
+}
+
+.sparkz-card__form,
+.sparkz-card__wallet-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.sparkz-card__form label,
+.sparkz-card__wallet-form label {
+  display: grid;
+  gap: 0.4rem;
+  color: #334155;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.sparkz-card__form input,
+.sparkz-card__wallet-form input {
+  min-height: 2.7rem;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #172033;
+  font: inherit;
+}
+
+.sparkz-card__form button,
+.sparkz-card__wallet-form button,
+.sparkz-card__secondary-button,
+.sparkz-card__tabs button {
+  min-height: 2.9rem;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: #144cdd;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.sparkz-card__secondary-button {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #172033;
+}
+
+.sparkz-card__notice {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.sparkz-card__idle {
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.sparkz-card__idle p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.sparkz-card__form button:disabled,
+.sparkz-card__wallet-form button:disabled,
+.sparkz-card__secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.sparkz-card__details {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.sparkz-card__tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  padding: 0.25rem;
+  border: 1px solid #dbe5f7;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.sparkz-card__tabs button {
+  min-height: 2.25rem;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.86rem;
+}
+
+.sparkz-card__tabs button[aria-selected="true"] {
+  background: #ffffff;
+  color: #144cdd;
+  box-shadow: 0 1px 4px rgba(15, 35, 80, 0.1);
+}
+
+.sparkz-card__section-header {
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid #dbe5f7;
+}
+
+.sparkz-card__activity-list {
+  display: grid;
+}
+
+.sparkz-card__activity-row,
+.sparkz-card__rate-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid #e5edf9;
+}
+
+.sparkz-card__activity-row:first-of-type,
+.sparkz-card__rate-row:first-of-type {
+  border-top: 0;
+}
+
+.sparkz-card__activity-row:last-child,
+.sparkz-card__rate-row:last-child {
+  padding-bottom: 0;
+}
+
+.sparkz-card__activity-row div,
+.sparkz-card__rate-row div,
+.sparkz-card__about,
+.sparkz-card__account {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.sparkz-card__activity-row a,
+.sparkz-card__metadata a {
+  color: #144cdd;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.sparkz-card__metadata {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.sparkz-card__metadata div,
+.sparkz-card__account-list {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid #e5edf9;
+}
+
+.sparkz-card__metadata dt,
+.sparkz-card__account-list strong {
+  color: #64748b;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.sparkz-card__metadata dd,
+.sparkz-card__account-list span {
+  margin: 0;
+  color: #172033;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.sparkz-card__activity-row > strong,
+.sparkz-card__rate-row > strong {
+  max-width: 8rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sparkz-card__rate-row span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.sparkz-card__error {
+  margin: 0;
+  color: #dc2626;
+  font-size: 0.88rem;
+}
+
+@media (max-width: 420px) {
+  .sparkz-card {
+    max-width: none;
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .sparkz-card__stats {
+    grid-template-columns: 1fr;
+  }
+
+  .sparkz-card__activity-row,
+  .sparkz-card__rate-row {
+    display: grid;
+  }
+
+  .sparkz-card__rate-row > strong {
+    max-width: none;
+    text-align: left;
+  }
+}

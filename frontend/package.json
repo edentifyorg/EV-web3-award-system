@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "neverflat-admin-ui",
   "version": "0.1.0",
   "private": true,
   "dependencies": {

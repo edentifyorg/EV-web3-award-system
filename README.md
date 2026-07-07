@@ -97,9 +97,9 @@ Defaults to 10 preview requests per second for 10 seconds and writes
 `evidence/load-test-ingest-preview-*.json`. Override with `LOAD_TEST_RPS`,
 `LOAD_TEST_DURATION_SECONDS`, and `LOAD_TEST_CONCURRENCY`.
 
-## Demo UI
+## Admin UI
 
-A Rabby-inspired demo frontend is available in `frontend/`.
+The NEVERFLAT admin console is available in `frontend/`.
 
 Run API and UI in two terminals:
 
@@ -107,16 +107,16 @@ Run API and UI in two terminals:
 # Terminal 1 (API)
 npm run api
 
-# Terminal 2 (UI)
+# Terminal 2 (admin UI)
 cd frontend
 npm run dev
 ```
 
-By default, the UI expects API at `http://localhost:3000` and supports `X-API-Key`.
+For local development, the admin UI remembers the API URL used at login. When served by Vite on port `3001`, it defaults to `http://localhost:3005`.
 
-## Identity And Test Modes
+## API Identity And Test Modes
 
-The user dashboard now supports two access modes:
+The backend supports two access modes:
 
 - **Identity mode (EMP-ready)**: Uses API identity endpoints and resolves contract ID from request header (default `x-contract-id`)
 - **Test mode (current integration fallback)**: Allows manual contract ID lookup for testing transactions and wallet flows before EMP is complete
@@ -124,11 +124,33 @@ The user dashboard now supports two access modes:
 ### User Endpoints
 
 - `GET /wallet/me` - Wallet for authenticated/forwarded identity context
+- `POST /spend/session` - Non-spending BEAI charging-session SPARKZ prompt
 - `POST /spend/me` - Spend for authenticated/forwarded identity context
 - `GET /wallet/:uid` - Manual contract ID wallet lookup (legacy/test flow)
 - `POST /spend` - Manual contract ID spend (legacy/test flow)
 
-The UI attempts identity mode first. If no identity header is present, it automatically falls back to test mode.
+The BEAI charging flow should first call `POST /spend/session` with
+`x-contract-id`, then call `POST /spend/me` only after the user confirms an
+amount. Successful spends return `spendReceipt`, which should be forwarded
+unchanged to the EMP or settlement receiver.
+
+The reusable BEAI React component package lives in
+`packages/sparkz-charging-card/`. It is separate from the `frontend/` admin
+console bundle.
+
+### BEIA React Package Integration
+
+The BEIA package exports `SparkzChargingCard`.
+
+- BEIA passes the logged-in app user UID as `contractId`
+- `UNPLUGGED` mode shows the user's SPARKZ account view via `GET /wallet/me`
+- Active session modes call `POST /spend/session` and show the spend prompt
+- `POST /spend/me` is called only after the user confirms an amount
+- Custodial wallet mode requires an installed EVM wallet signature before mode switch
+- BEIA should set the component back to `UNPLUGGED` when the CDR/session close event is received
+
+See `packages/sparkz-charging-card/README.md` for install instructions, props,
+state model, and callback examples.
 
 ## Award Rules
 

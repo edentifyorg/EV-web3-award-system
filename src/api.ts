@@ -45,6 +45,398 @@ const TREASURY_ADDRESS = process.env.TREASURY_ADDRESS;
 const TREASURY_GAS_WARNING_THRESHOLD_MATIC = process.env.TREASURY_GAS_WARNING_THRESHOLD_MATIC || '0.05';
 const ADMIN_ALERT_WEBHOOK_URL = process.env.ADMIN_ALERT_WEBHOOK_URL;
 
+const openApiSpec = {
+  openapi: '3.0.3',
+  info: {
+    title: 'NEVERFLAT Award Core API',
+    version: '1.0.0',
+    description: 'Award, wallet, and SPARKZ spend APIs used by NEVERFLAT admin tools and BEIA integration.',
+  },
+  servers: [
+    {
+      url: '/',
+      description: 'Current API host',
+    },
+  ],
+  tags: [
+    { name: 'Health' },
+    { name: 'CDR' },
+    { name: 'Spends' },
+    { name: 'Wallets' },
+    { name: 'Transactions' },
+  ],
+  components: {
+    securitySchemes: {
+      ApiKeyAuth: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'X-API-Key',
+      },
+      IngestApiKeyAuth: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'X-Ingest-API-Key',
+      },
+      ContractIdentity: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'x-contract-id',
+      },
+    },
+    schemas: {
+      ApiError: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', example: 'error' },
+          code: { type: 'string', nullable: true, example: 'INVALID_AMOUNT' },
+          message: { type: 'string', nullable: true },
+          error: { type: 'string', nullable: true },
+        },
+      },
+      WalletActivity: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          type: { type: 'string', example: 'earned' },
+          amount: { type: 'number', example: 18 },
+          txHash: { type: 'string', nullable: true },
+          timestamp: { type: 'string', format: 'date-time', nullable: true },
+        },
+      },
+      WalletPayload: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          status: { type: 'string', example: 'success' },
+          uid: { type: 'string', example: '000' },
+          walletAddress: { type: 'string', nullable: true },
+          managedWalletAddress: { type: 'string', nullable: true },
+          walletMode: { type: 'string', enum: ['managed', 'custodial', 'unknown'] },
+          balance: { type: 'number', example: 12.4 },
+          totalAwarded: { type: 'number', example: 20 },
+          totalSpent: { type: 'number', example: 7.6 },
+          history: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/WalletActivity' },
+          },
+        },
+      },
+      SpendSessionRequest: {
+        type: 'object',
+        required: ['sessionId', 'providerId', 'chargerId', 'status'],
+        properties: {
+          sessionId: { type: 'string', example: 'spend-001' },
+          providerId: { type: 'string', example: 'NF' },
+          chargerId: { type: 'string', example: 'charger-001' },
+          status: {
+            type: 'string',
+            enum: ['CHARGER_OPENED', 'PLUGGED_IN', 'SESSION_STARTED'],
+            example: 'PLUGGED_IN',
+          },
+          countryCode: { type: 'string', example: 'GB' },
+          estimatedKwh: { type: 'number', example: 24.5 },
+          estimatedCost: { type: 'number', example: 5 },
+        },
+      },
+      SpendSessionResponse: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', example: 'success' },
+          contractId: { type: 'string', example: '000' },
+          sessionId: { type: 'string', example: 'spend-001' },
+          providerId: { type: 'string', example: 'NF' },
+          chargerId: { type: 'string', example: 'charger-001' },
+          sessionStatus: { type: 'string', example: 'PLUGGED_IN' },
+          wallet: {
+            type: 'object',
+            properties: {
+              availableBalance: { type: 'number', example: 12.4 },
+              totalEarned: { type: 'number', example: 20 },
+              totalSpent: { type: 'number', example: 7.6 },
+              mode: { type: 'string', example: 'managed' },
+            },
+          },
+          spend: {
+            type: 'object',
+            properties: {
+              eligible: { type: 'boolean', example: true },
+              maxSpendable: { type: 'number', example: 12.4 },
+              suggestedAmount: { type: 'number', example: 5 },
+              label: { type: 'string', example: 'Charging discount' },
+              message: { type: 'string', example: 'You have 12.40 SPARKZ available' },
+            },
+          },
+          recentActivity: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/WalletActivity' },
+          },
+          rewardRates: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string', example: 'offPeakCharging' },
+                label: { type: 'string', example: 'Off-peak charging' },
+                enabled: { type: 'boolean', example: true },
+                tokensPerKWh: { type: 'number', example: 0.25 },
+                kWhPerSparkz: { type: 'number', example: 4 },
+                description: { type: 'string', example: '1 SPARKZ per 4 kWh' },
+              },
+            },
+          },
+        },
+      },
+      SpendMeRequest: {
+        type: 'object',
+        required: ['amount', 'sessionId', 'providerId'],
+        properties: {
+          amount: { type: 'number', minimum: 0, exclusiveMinimum: true, example: 5 },
+          sessionId: { type: 'string', example: 'spend-001' },
+          providerId: { type: 'string', example: 'NF' },
+          label: { type: 'string', example: 'Charging discount' },
+        },
+      },
+      SpendReceiptResponse: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          status: { type: 'string', example: 'success' },
+          message: { type: 'string', example: 'Spend processed successfully' },
+          uid: { type: 'string', example: '000' },
+          sessionId: { type: 'string', example: 'spend-001' },
+          providerId: { type: 'string', example: 'NF' },
+          amount: { type: 'number', example: 5 },
+          txHash: { type: 'string', nullable: true },
+          receipt: { type: 'object', additionalProperties: true },
+        },
+      },
+      LinkedWalletRequest: {
+        type: 'object',
+        required: ['walletAddress', 'signature', 'message'],
+        properties: {
+          walletAddress: { type: 'string', example: '0x0000000000000000000000000000000000000000' },
+          signature: { type: 'string' },
+          message: { type: 'string' },
+          label: { type: 'string', example: 'Main wallet' },
+        },
+      },
+      WalletModeRequest: {
+        type: 'object',
+        required: ['mode'],
+        properties: {
+          mode: { type: 'string', enum: ['managed', 'custodial'], example: 'custodial' },
+          walletAddress: { type: 'string', nullable: true },
+        },
+      },
+    },
+  },
+  paths: {
+    '/ingest/health': {
+      get: {
+        tags: ['Health'],
+        summary: 'Health check',
+        responses: {
+          '200': {
+            description: 'API is running',
+          },
+        },
+      },
+    },
+    '/ingest/cdr': {
+      post: {
+        tags: ['CDR'],
+        summary: 'Ingest a charging CDR and award SPARKZ',
+        security: [{ IngestApiKeyAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', additionalProperties: true },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'CDR accepted and processed' },
+          '401': { description: 'Missing or invalid ingest API key', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+          '500': { description: 'Processing error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+        },
+      },
+    },
+    '/spend/session': {
+      post: {
+        tags: ['Spends'],
+        summary: 'Get charging-session SPARKZ spend eligibility',
+        description: 'BEIA calls this when a user opens a charger, plugs in, or starts a session. This endpoint never spends tokens.',
+        security: [{ ApiKeyAuth: [], ContractIdentity: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/SpendSessionRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Wallet and spend eligibility for the session',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SpendSessionResponse' } } },
+          },
+          '400': { description: 'Missing or invalid session context', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+          '401': { description: 'Missing API key or x-contract-id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+          '404': { description: 'Wallet or contract not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+        },
+      },
+    },
+    '/spend/me': {
+      post: {
+        tags: ['Spends'],
+        summary: 'Spend SPARKZ for the authenticated contract identity',
+        description: 'BEIA uses the successful receipt response from this endpoint to apply the charging discount.',
+        security: [{ ApiKeyAuth: [], ContractIdentity: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/SpendMeRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Spend processed and receipt returned',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SpendReceiptResponse' } } },
+          },
+          '400': {
+            description: 'Validation error. Codes include INVALID_AMOUNT, INSUFFICIENT_SPARKZ, MISSING_SESSION_ID, and MISSING_PROVIDER_ID.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } },
+          },
+          '401': { description: 'Missing API key or x-contract-id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+        },
+      },
+    },
+    '/wallet/me': {
+      get: {
+        tags: ['Wallets'],
+        summary: 'Get wallet details for the authenticated contract identity',
+        security: [{ ApiKeyAuth: [], ContractIdentity: [] }],
+        parameters: [
+          {
+            in: 'query',
+            name: 'walletAddress',
+            required: false,
+            schema: { type: 'string' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Wallet balance, totals, mode, linked wallets, and recent activity',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/WalletPayload' } } },
+          },
+          '401': { description: 'Missing API key or x-contract-id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+        },
+      },
+    },
+    '/wallet/{uid}': {
+      get: {
+        tags: ['Wallets'],
+        summary: 'Get wallet details by UID',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            in: 'path',
+            name: 'uid',
+            required: true,
+            schema: { type: 'string' },
+          },
+          {
+            in: 'query',
+            name: 'walletAddress',
+            required: false,
+            schema: { type: 'string' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Wallet details',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/WalletPayload' } } },
+          },
+        },
+      },
+    },
+    '/wallet/{uid}/linked-wallets': {
+      post: {
+        tags: ['Wallets'],
+        summary: 'Link a user-owned wallet after signature verification',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            in: 'path',
+            name: 'uid',
+            required: true,
+            schema: { type: 'string' },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/LinkedWalletRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Linked wallet stored' },
+          '400': { description: 'Invalid wallet link request', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+        },
+      },
+    },
+    '/wallet/{uid}/mode': {
+      post: {
+        tags: ['Wallets'],
+        summary: 'Set wallet mode',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            in: 'path',
+            name: 'uid',
+            required: true,
+            schema: { type: 'string' },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/WalletModeRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Wallet mode updated' },
+          '400': { description: 'Invalid mode request', content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiError' } } } },
+        },
+      },
+    },
+    '/transactions': {
+      get: {
+        tags: ['Transactions'],
+        summary: 'Get recent awards and spends',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          {
+            in: 'query',
+            name: 'limit',
+            schema: { type: 'integer', default: 50, maximum: 500 },
+          },
+        ],
+        responses: {
+          '200': { description: 'Recent transactions' },
+        },
+      },
+    },
+  },
+} as const;
+
 // Admin credentials must be configured for admin login.
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -178,6 +570,52 @@ function getRequestContractId(req: Request): string | null {
   }
   const normalized = normalizeUid(String(raw));
   return normalized || null;
+}
+
+const SESSION_SPEND_STATUSES = new Set(['CHARGER_OPENED', 'PLUGGED_IN', 'SESSION_STARTED']);
+
+function getPositiveAmount(value: unknown): number | null {
+  const amount = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function getOptionalFiniteNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function spendValidationError(res: Response, code: string, message: string, extra?: Record<string, unknown>) {
+  return res.status(400).json({
+    status: 'error',
+    code,
+    message,
+    ...(extra || {}),
+  });
+}
+
+function getPublicRewardRates() {
+  const rules = getRules().rules;
+  const toRate = (
+    key: 'offPeakCharging' | 'v2gDischarge',
+    label: string,
+    description: string
+  ) => {
+    const rule = rules[key];
+    return {
+      key,
+      label,
+      enabled: rule.enabled,
+      tokensPerKWh: rule.tokensPerKWh,
+      kWhPerSparkz: rule.tokensPerKWh > 0 ? Number((1 / rule.tokensPerKWh).toFixed(2)) : null,
+      description: rule.description || description,
+    };
+  };
+
+  return [
+    toRate('offPeakCharging', 'Off-peak charging', 'SPARKZ earned for eligible off-peak charging'),
+    toRate('v2gDischarge', 'V2G discharge', 'SPARKZ earned for eligible vehicle-to-grid discharge'),
+  ];
 }
 
 function ensureTestUidLookupEnabled(req: Request, res: Response, next: NextFunction): void {
@@ -2210,6 +2648,126 @@ app.post('/ingest/cdr', validateIngestApiKey, async (req: Request, res: Response
 });
 
 /**
+ * Session-context spend prompt endpoint.
+ * POST /spend/session
+ *
+ * Resolves contract identity and returns wallet/session spend eligibility.
+ * This endpoint never spends tokens.
+ */
+app.post('/spend/session', validateApiKey, async (req: Request, res: Response) => {
+  try {
+    const contractId = getRequestContractId(req);
+    if (!contractId) {
+      return res.status(401).json({
+        status: 'error',
+        message: `Missing identity header: ${USER_IDENTITY_HEADER}`,
+      });
+    }
+
+    const normalizedUid = normalizeUid(contractId);
+    const {
+      sessionId,
+      providerId,
+      chargerId,
+      status: sessionStatus,
+      countryCode,
+      estimatedKwh,
+      estimatedCost,
+    } = req.body || {};
+
+    const missingFields = [
+      !sessionId ? 'sessionId' : null,
+      !providerId ? 'providerId' : null,
+      !chargerId ? 'chargerId' : null,
+      !sessionStatus ? 'status' : null,
+    ].filter(Boolean);
+
+    if (!normalizedUid || missingFields.length) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'MISSING_REQUIRED_FIELDS',
+        message: `Missing required fields: ${missingFields.join(', ')}`,
+        missingFields,
+      });
+    }
+
+    if (typeof sessionStatus !== 'string' || !SESSION_SPEND_STATUSES.has(sessionStatus)) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'INVALID_SESSION_STATUS',
+        message: 'Invalid status. Use CHARGER_OPENED, PLUGGED_IN, or SESSION_STARTED.',
+      });
+    }
+
+    const numericEstimatedKwh = getOptionalFiniteNumber(estimatedKwh);
+    const numericEstimatedCost = getOptionalFiniteNumber(estimatedCost);
+
+    if (estimatedKwh !== undefined && numericEstimatedKwh === undefined) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'INVALID_ESTIMATED_KWH',
+        message: 'estimatedKwh must be a number when provided.',
+      });
+    }
+
+    if (estimatedCost !== undefined && numericEstimatedCost === undefined) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'INVALID_ESTIMATED_COST',
+        message: 'estimatedCost must be a number when provided.',
+      });
+    }
+
+    const walletPayload = await getWalletPayload(normalizedUid);
+    const availableBalance = Number(walletPayload.balance || 0);
+    const totalEarned = Number(walletPayload.totalAwarded || 0);
+    const totalSpent = Number(walletPayload.totalSpent || 0);
+    const hasSpendableSparkz = Number.isFinite(availableBalance) && availableBalance > 0;
+    const suggestedAmount = hasSpendableSparkz
+      ? Number(Math.min(
+        availableBalance,
+        numericEstimatedCost && numericEstimatedCost > 0 ? numericEstimatedCost : availableBalance
+      ).toFixed(2))
+      : 0;
+
+    return res.status(200).json({
+      status: 'success',
+      contractId: normalizedUid,
+      sessionId,
+      providerId,
+      chargerId,
+      sessionStatus,
+      countryCode: countryCode || null,
+      estimatedKwh: numericEstimatedKwh,
+      estimatedCost: numericEstimatedCost,
+      wallet: {
+        availableBalance,
+        totalEarned,
+        totalSpent,
+        mode: walletPayload.walletMode || 'unknown',
+      },
+      spend: {
+        eligible: hasSpendableSparkz,
+        maxSpendable: hasSpendableSparkz ? availableBalance : 0,
+        suggestedAmount,
+        label: 'Charging discount',
+        message: hasSpendableSparkz
+          ? `You have ${availableBalance.toFixed(2)} SPARKZ available`
+          : 'No SPARKZ are available for this charging session',
+      },
+      recentActivity: walletPayload.history || [],
+      rewardRates: getPublicRewardRates(),
+    });
+  } catch (err) {
+    console.error('Spend session error:', err);
+    return res.status(500).json({
+      status: 'error',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/**
  * Spend endpoint
  * POST /spend
  * 
@@ -2415,7 +2973,47 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
     const { sessionId, providerId, amount, label } = req.body;
     const normalizedUid = normalizeUid(contractId);
 
-    if (!normalizedUid || !amount || amount <= 0) {
+    if (!sessionId || typeof sessionId !== 'string') {
+      await safeAuditLog({
+        eventType: 'spend.validation_failed',
+        actorType: 'contract_identity',
+        actorId: normalizedUid || null,
+        targetType: 'spend_request',
+        targetId: null,
+        status: 'error',
+        metadata: {
+          uid: normalizedUid,
+          amount,
+          sessionId,
+          providerId,
+          reason: 'missing_session_id',
+        },
+      });
+      return spendValidationError(res, 'MISSING_SESSION_ID', 'sessionId is required');
+    }
+
+    if (!providerId || typeof providerId !== 'string') {
+      await safeAuditLog({
+        eventType: 'spend.validation_failed',
+        actorType: 'contract_identity',
+        actorId: normalizedUid || null,
+        targetType: 'spend_request',
+        targetId: sessionId || null,
+        status: 'error',
+        metadata: {
+          uid: normalizedUid,
+          amount,
+          sessionId,
+          providerId,
+          reason: 'missing_provider_id',
+        },
+      });
+      return spendValidationError(res, 'MISSING_PROVIDER_ID', 'providerId is required');
+    }
+
+    const amountValue = getPositiveAmount(amount);
+
+    if (!normalizedUid || amountValue === null) {
       await safeAuditLog({
         eventType: 'spend.validation_failed',
         actorType: 'contract_identity',
@@ -2431,21 +3029,42 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
           reason: 'missing_or_invalid_amount',
         },
       });
-      return res.status(400).json({
-        status: 'error',
-        message: 'Missing or invalid fields: amount (must be > 0)',
-      });
+      return spendValidationError(res, 'INVALID_AMOUNT', 'amount must be greater than 0');
     }
 
     const walletConfig = await getUserWalletConfig(normalizedUid);
     const userAddress = walletConfig.managedWalletAddress;
+    const availableBalance = Number(ethers.formatEther(await getOnChainTokenBalance(userAddress)));
+
+    if (amountValue > availableBalance) {
+      await safeAuditLog({
+        eventType: 'spend.validation_failed',
+        actorType: 'contract_identity',
+        actorId: normalizedUid,
+        targetType: 'spend_request',
+        targetId: sessionId,
+        status: 'error',
+        metadata: {
+          uid: normalizedUid,
+          amount: amountValue,
+          availableBalance,
+          sessionId,
+          providerId,
+          reason: 'insufficient_sparkz',
+        },
+      });
+      return spendValidationError(res, 'INSUFFICIENT_SPARKZ', 'amount exceeds available SPARKZ balance', {
+        availableBalance,
+        requestedAmount: amountValue,
+      });
+    }
 
     await auditTreasuryGasWarning('spend.identity.before_execution');
 
     let spendResult = await processSpend(
       {
         userAddress,
-        amount,
+        amount: amountValue,
         sessionId,
       },
       treasurySigner
@@ -2460,7 +3079,7 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
           spendResult = await processSpend(
             {
               userAddress,
-              amount,
+              amount: amountValue,
               sessionId,
             },
             treasurySigner
@@ -2480,7 +3099,7 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
           status: 'retry_required',
           metadata: {
             uid: normalizedUid,
-            amount,
+            amount: amountValue,
             sessionId,
             providerId,
             error: approvalErr instanceof Error ? approvalErr.message : String(approvalErr),
@@ -2502,7 +3121,7 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
         status: 'retry_required',
         metadata: {
           uid: normalizedUid,
-          amount,
+          amount: amountValue,
           sessionId,
           providerId,
           error: spendResult.error,
@@ -3733,6 +4352,39 @@ app.delete('/admin/off-peak/:countryCode', validateAdmin, (req: Request, res: Re
     },
   });
   res.json({ status: 'ok', windows: getOffPeakWindows() });
+});
+
+app.get('/openapi.json', (_req: Request, res: Response) => {
+  res.json(openApiSpec);
+});
+
+app.get(['/api-docs', '/docs'], (_req: Request, res: Response) => {
+  res.type('html').send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NEVERFLAT API Docs</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <style>
+      body { margin: 0; background: #ffffff; }
+      .swagger-ui .topbar { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.ui = SwaggerUIBundle({
+        url: '/openapi.json',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [SwaggerUIBundle.presets.apis],
+        layout: 'BaseLayout'
+      });
+    </script>
+  </body>
+</html>`);
 });
 
 // Error handling middleware
