@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 
 const contractAddress = '0x605871D30DC278a036F09e2ace771df8a224624B';
-const rpcUrl = 'https://rpc-amoy.polygon.technology/'; // Polygon Amoy RPC
+const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-amoy.drpc.org'; // Polygon Amoy RPC
 
 // ERC20 ABI for award and spend operations
 const abi = [

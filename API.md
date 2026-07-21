@@ -514,6 +514,24 @@ is therefore not the delivery channel. A BEIA-facing reservation-status API is
 required so BEIA can retrieve and forward the final settlement. That read API
 is not yet implemented.
 
+For an external wallet, call `POST /spend/reservation-approval-intent` first,
+submit the returned ERC-20 approval transaction through the connected wallet,
+wait for confirmation, then include `walletAddress` and `authorizationTxHash`
+in this request. NEVERFLAT verifies the on-chain allowance before reserving.
+
+### External Wallet Reservation Approval
+
+**POST** `/spend/reservation-approval-intent`
+
+Returns a capped ERC-20 `approve` transaction for the active linked wallet. The
+approval covers active reservations for that wallet plus the requested amount.
+The user submits it once at reservation time; delayed CDR settlement then uses
+`transferFrom` without another signature.
+
+A partial settlement may leave residual allowance. Settlement output flags
+`authorizationCleanupRequired` so the integration can ask the wallet to revoke
+or replace that allowance.
+
 Required header:
 - `x-contract-id: <contract-id>` (or the header name configured in `USER_IDENTITY_HEADER`)
 
@@ -1007,7 +1025,7 @@ records so later retry/reconciliation workers can use the same schema.
 All transactions execute on **Polygon Amoy Testnet**:
 
 - **Network**: Polygon Amoy
-- **RPC**: https://rpc-amoy.polygon.technology/
+- **RPC**: https://polygon-amoy.drpc.org
 - **SPARKZ Token**: 0x605871D30DC278a036F09e2ace771df8a224624B
 - **Explorer**: https://amoy.polygonscan.com/
 

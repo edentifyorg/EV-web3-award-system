@@ -153,6 +153,8 @@ The BEIA package exports `SparkzChargingCard`.
   appear in the final Aarhus CDR
 - BEIA will retrieve the final settlement from NEVERFLAT and forward it to the EMP
 - Custodial wallet mode requires an installed EVM wallet signature before mode switch
+- External-wallet reservations request a capped ERC-20 approval at reservation
+  time, allowing delayed CDR settlement without a second signature
 - BEIA should set the component back to `UNPLUGGED` when the CDR/session close event is received
 
 See `packages/sparkz-charging-card/README.md` for install instructions, props,

@@ -246,6 +246,12 @@ The backend validates:
 This call reserves SPARKZ; it does not transfer them. The response contains a
 reservation representing up to the same number of free kWh.
 
+If the active wallet is external, the component first requests a capped ERC-20
+approval from the connected wallet. The user signs and submits that approval
+once, before the reservation is created. NEVERFLAT verifies the confirmed
+allowance and can then settle up to the reserved amount after the CDR without a
+second user signature.
+
 ### 4. User Skips Spending
 
 If the user taps `Do not spend tokens for this session`, the component calls
@@ -410,6 +416,19 @@ Purpose:
 Required for BEIA to obtain the final Aarhus-CDR settlement and pass it to the
 EMP. This endpoint is documented as planned and is not currently implemented.
 
+### `POST /spend/reservation-approval-intent`
+
+Used automatically by the component for an active external wallet. It returns
+an ERC-20 `approve` transaction capped to the existing active reservations plus
+the new reservation. After the wallet confirms that transaction, the component
+passes its hash to `POST /spend/me`.
+
+If final energy is lower than the reservation, the unused SPARKZ are released
+in NEVERFLAT but the equivalent residual on-chain allowance can remain. The
+settlement status will flag that the external wallet should revoke or replace
+the residual allowance. A later reservation approval replaces it with the
+allowance required for then-active reservations.
+
 ### `POST /wallet/:uid/linked-wallets`
 
 Used when a user connects a wallet app and signs the ownership message.
@@ -451,7 +470,8 @@ Relevant spend validation codes:
 The current charging-session flow does not implement:
 
 - Manual cancellation before the final CDR.
-- BEIA reservation-status polling and settlement delivery to the EMP.
+- BEIA reservation-status polling, settlement delivery to the EMP, and external
+  wallet residual-allowance cleanup UI.
 - Spend caps beyond available balance.
 - Custom spend rules beyond `amount > 0` and `amount <= availableBalance`.
 

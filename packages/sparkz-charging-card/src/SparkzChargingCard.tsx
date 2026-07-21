@@ -17,6 +17,13 @@ type SpendResponse = {
   reservation: SparkzReservation;
 };
 
+type ReservationApprovalIntent = {
+  status: 'requires_signature';
+  walletAddress: string;
+  requiredAllowance: string;
+  transaction: { from: string; to: string; value: string; data: string };
+};
+
 type BrowserEthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
 };
@@ -239,6 +246,26 @@ export default function SparkzChargingCard({
     setError('');
     setReceipt(null);
     try {
+      let authorizationTxHash: string | undefined;
+      let reservationWalletAddress: string | undefined;
+      if (wallet?.walletMode === 'custodial') {
+        const ethereum = (window as Window & { ethereum?: BrowserEthereumProvider }).ethereum;
+        if (!ethereum) throw new Error('Open the linked wallet to authorize this reservation.');
+        reservationWalletAddress = wallet.walletAddress;
+        const intentRes = await fetch(`${apiBaseUrl}/spend/reservation-approval-intent`, {
+          method: 'POST',
+          headers: contractHeaders(contractId),
+          body: JSON.stringify({ walletAddress: reservationWalletAddress, amount, sessionId, providerId }),
+        });
+        const intent = await readJson<ReservationApprovalIntent>(intentRes);
+        authorizationTxHash = await ethereum.request({
+          method: 'eth_sendTransaction', params: [intent.transaction],
+        }) as string;
+        if (!authorizationTxHash) throw new Error('The wallet did not return an approval transaction hash.');
+        const browserProvider = new ethers.BrowserProvider(ethereum);
+        const approvalReceipt = await browserProvider.waitForTransaction(authorizationTxHash);
+        if (!approvalReceipt || approvalReceipt.status !== 1) throw new Error('The wallet authorization transaction failed.');
+      }
       const res = await fetch(`${apiBaseUrl}/spend/me`, {
         method: 'POST',
         headers: contractHeaders(contractId),
@@ -247,6 +274,8 @@ export default function SparkzChargingCard({
           sessionId,
           providerId,
           label: 'Charging discount',
+          walletAddress: reservationWalletAddress,
+          authorizationTxHash,
         }),
       });
       const data = await readJson<SpendResponse>(res);

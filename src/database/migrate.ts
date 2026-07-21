@@ -174,6 +174,16 @@ async function runMigrations() {
       console.log('[Migration] 013: Spend reservations already exist');
     }
 
+    // Migration 014: retain external-wallet authorization evidence.
+    const hasReservationAuthorization = await db.schema.hasColumn('spend_reservations', 'authorization_tx_hash');
+    if (!hasReservationAuthorization) {
+      const { up } = await import('./migrations/014_add_reservation_authorization');
+      await up(db);
+      console.log('[Migration] 014: Added reservation wallet authorization');
+    } else {
+      console.log('[Migration] 014: Reservation wallet authorization already exists');
+    }
+
     console.log('[Migration] All migrations completed successfully');
   } catch (err) {
     console.error('[Migration] Error:', err);

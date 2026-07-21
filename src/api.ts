@@ -27,6 +27,7 @@ import { getDatabase } from './database/connection';
 import { normaliseSession } from './normaliser';
 import { prepareAward } from './awardExecutor';
 import { calculateReservationSettlement } from './reservation';
+import { buildReservationApprovalTransaction } from './reservationApproval';
 
 const app = express();
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
@@ -40,7 +41,7 @@ const API_KEY = process.env.API_KEY;
 const INGEST_API_KEY = process.env.INGEST_API_KEY;
 const USER_IDENTITY_HEADER = (process.env.USER_IDENTITY_HEADER || 'x-contract-id').toLowerCase();
 const ENABLE_TEST_UID_LOOKUP = process.env.ENABLE_TEST_UID_LOOKUP !== 'false';
-const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || 'https://rpc-amoy.polygon.technology/';
+const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || 'https://polygon-amoy.drpc.org';
 const TOKEN_CONTRACT_ADDRESS = process.env.TOKEN_CONTRACT_ADDRESS || '0x605871D30DC278a036F09e2ace771df8a224624B';
 const TREASURY_ADDRESS = process.env.TREASURY_ADDRESS;
 const TREASURY_GAS_WARNING_THRESHOLD_MATIC = process.env.TREASURY_GAS_WARNING_THRESHOLD_MATIC || '0.05';
@@ -494,6 +495,17 @@ function toUserFacingSpendError(error?: unknown): string {
   return 'The spend could not be completed. Please try again or contact support.';
 }
 
+async function getTokenAllowance(owner: string, spender: string): Promise<bigint> {
+  const provider = treasurySigner.provider;
+  if (!provider) throw new Error('Provider not available');
+  const token = new ethers.Contract(
+    TOKEN_CONTRACT_ADDRESS,
+    ['function allowance(address owner, address spender) view returns (uint256)'],
+    provider
+  );
+  return token.allowance(owner, spender);
+}
+
 async function processSpendWithAutoApproval(input: {
   uid: string;
   userAddress: string;
@@ -548,11 +560,14 @@ async function settleReservationFromCdr(cdr: RawSession | OCPICDRFormat) {
   const { settledAmount: amount } = calculateReservationSettlement(Number(reservation.reserved_amount), deliveredKwh);
   try {
     if (amount === 0) return await SpendReservations.complete(reservation.id, deliveredKwh, 0);
-    const spendResult = await processSpendWithAutoApproval({
-      uid: session.uid, userAddress: reservation.wallet_address, amount,
-      sessionId: session.sessionId, auditContext: 'reservation_settlement',
-      onApprovalFailure: async () => undefined,
-    });
+    const isManagedReservation = reservation.wallet_address.toLowerCase() === getManagedWalletAddress(session.uid).toLowerCase();
+    const spendResult = isManagedReservation
+      ? await processSpendWithAutoApproval({
+        uid: session.uid, userAddress: reservation.wallet_address, amount,
+        sessionId: session.sessionId, auditContext: 'reservation_settlement',
+        onApprovalFailure: async () => undefined,
+      })
+      : await processSpend({ userAddress: reservation.wallet_address, amount, sessionId: session.sessionId }, treasurySigner);
     if (!spendResult.success || !spendResult.txHash) throw new Error(spendResult.error || 'Reservation settlement failed');
     const completed = await SpendReservations.complete(reservation.id, deliveredKwh, spendResult.amount, spendResult.txHash);
     const spendReceipt = await createAndStoreSpendReceipt({
@@ -565,7 +580,11 @@ async function settleReservationFromCdr(cdr: RawSession | OCPICDRFormat) {
       metadata: { reservedAmount: reservation.reserved_amount, settledAmount: spendResult.amount,
         releasedAmount: completed.released_amount, deliveredKwh, receiptId: spendReceipt.payload.receiptId },
     });
-    return { ...completed, spendReceipt };
+    return {
+      ...completed,
+      spendReceipt,
+      authorizationCleanupRequired: !isManagedReservation && Number(completed.released_amount || 0) > 0,
+    };
   } catch (err) {
     await SpendReservations.retry(reservation.id, getErrorMessage(err));
     throw err;
@@ -596,8 +615,7 @@ async function createCustodialSpendIntent(input: {
     throw new Error('Treasury address is not configured');
   }
 
-  const provider = treasurySigner.provider;
-  const network = provider ? await provider.getNetwork() : { chainId: 80002n };
+  const network = { chainId: BigInt(process.env.CHAIN_ID || '80002') };
   const checksumWalletAddress = ethers.getAddress(input.walletAddress);
   const tokenInterface = new ethers.Interface(['function transfer(address to, uint256 amount) returns (bool)']);
   const amountWei = ethers.parseEther(input.amount.toString());
@@ -631,6 +649,40 @@ async function createCustodialSpendIntent(input: {
       value: '0',
       data,
     },
+  };
+}
+
+async function createReservationApprovalIntent(input: {
+  uid: string;
+  walletAddress: string;
+  amount: number;
+  sessionId: string;
+  providerId: string;
+}) {
+  const treasuryAddress = await getTreasuryWalletAddress();
+  if (!treasuryAddress) throw new Error('Treasury address is not configured');
+  const checksumWalletAddress = await validateCustodialSpendIntentInput(input);
+  const activeReserved = await SpendReservations.getActiveTotal(input.uid, checksumWalletAddress);
+  const requiredAllowance = Number((activeReserved + input.amount).toFixed(2));
+  const network = { chainId: BigInt(process.env.CHAIN_ID || '80002') };
+  const transaction = buildReservationApprovalTransaction({
+    tokenContractAddress: TOKEN_CONTRACT_ADDRESS,
+    treasuryAddress,
+    walletAddress: checksumWalletAddress,
+    allowanceSparkz: requiredAllowance,
+  });
+  return {
+    status: 'requires_signature',
+    contractId: input.uid,
+    walletAddress: checksumWalletAddress,
+    amount: input.amount.toString(),
+    requiredAllowance: requiredAllowance.toString(),
+    sessionId: input.sessionId,
+    providerId: input.providerId,
+    chainId: Number(network.chainId),
+    tokenContractAddress: TOKEN_CONTRACT_ADDRESS,
+    treasuryAddress,
+    transaction,
   };
 }
 
@@ -1197,6 +1249,24 @@ function buildOpenApiSpec(req: Request) {
             403: errorResponse,
             404: errorResponse,
             500: errorResponse,
+          },
+        },
+      },
+      '/spend/reservation-approval-intent': {
+        post: {
+          tags: ['Spends'],
+          summary: 'Build a capped external-wallet approval for a reservation',
+          security: apiKeySecurity,
+          parameters: [{ $ref: '#/components/parameters/ContractIdHeader' }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ReservationApprovalRequest' } } },
+          },
+          responses: {
+            200: { description: 'Approval transaction requires the connected wallet signature' },
+            400: errorResponse,
+            401: errorResponse,
+            403: errorResponse,
           },
         },
       },
@@ -1893,6 +1963,18 @@ function buildOpenApiSpec(req: Request) {
             sessionId: { type: 'string', example: 'spend-001' },
             providerId: { type: 'string', example: 'NF' },
             label: { type: 'string', example: 'Charging discount' },
+            walletAddress: { type: 'string', description: 'Required for an active external wallet' },
+            authorizationTxHash: { type: 'string', description: 'Confirmed approval transaction; required for an external wallet' },
+          },
+        },
+        ReservationApprovalRequest: {
+          type: 'object',
+          required: ['walletAddress', 'amount', 'sessionId', 'providerId'],
+          properties: {
+            walletAddress: { type: 'string' },
+            amount: { type: 'number', example: 5 },
+            sessionId: { type: 'string', example: 'spend-001' },
+            providerId: { type: 'string', example: 'NF' },
           },
         },
         SpendResponse: {
@@ -2737,6 +2819,33 @@ app.post('/spend', validateApiKey, async (req: Request, res: Response) => {
   }
 });
 
+/** Build a capped ERC-20 approval for an external wallet reservation. */
+app.post('/spend/reservation-approval-intent', validateApiKey, async (req: Request, res: Response) => {
+  try {
+    const contractId = getRequestContractId(req);
+    if (!contractId) return res.status(401).json({ status: 'error', message: `Missing identity header: ${USER_IDENTITY_HEADER}` });
+    const normalizedUid = normalizeUid(contractId);
+    const { walletAddress, amount, sessionId, providerId } = req.body || {};
+    const amountValue = getPositiveAmount(amount);
+    if (!sessionId || !providerId || amountValue === null) {
+      return spendValidationError(res, 'INVALID_RESERVATION_APPROVAL', 'walletAddress, amount, sessionId and providerId are required');
+    }
+    const walletConfig = await getUserWalletConfig(normalizedUid);
+    if (walletConfig.walletMode !== 'custodial') {
+      return spendValidationError(res, 'MANAGED_WALLET_NO_APPROVAL_REQUIRED', 'Managed wallets do not require user authorization');
+    }
+    if (!walletAddress || walletConfig.walletAddress.toLowerCase() !== String(walletAddress).toLowerCase()) {
+      return spendValidationError(res, 'WALLET_MISMATCH', 'walletAddress must be the active linked wallet');
+    }
+    const approvalIntent = await createReservationApprovalIntent({
+      uid: normalizedUid, walletAddress, amount: amountValue, sessionId, providerId,
+    });
+    return res.status(200).json(approvalIntent);
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: getErrorMessage(err) });
+  }
+});
+
 /**
  * Spend endpoint using authenticated identity context
  * POST /spend/me
@@ -2764,7 +2873,7 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
       });
     }
 
-    const { sessionId, providerId, amount, label } = req.body;
+    const { sessionId, providerId, amount, label, walletAddress, authorizationTxHash } = req.body;
     const normalizedUid = normalizeUid(contractId);
 
     if (!sessionId || typeof sessionId !== 'string') {
@@ -2827,7 +2936,11 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
     }
 
     const walletConfig = await getUserWalletConfig(normalizedUid);
-    const userAddress = walletConfig.managedWalletAddress;
+    const userAddress = walletConfig.walletAddress;
+    const isExternalWallet = walletConfig.walletMode === 'custodial';
+    if (isExternalWallet && (!walletAddress || String(walletAddress).toLowerCase() !== userAddress.toLowerCase())) {
+      return spendValidationError(res, 'WALLET_MISMATCH', 'walletAddress must be the active linked wallet');
+    }
     const onChainBalance = Number(ethers.formatEther(await getOnChainTokenBalance(userAddress)));
     const reservedBalance = await SpendReservations.getActiveTotal(normalizedUid);
     const availableBalance = Math.max(0, onChainBalance - reservedBalance);
@@ -2855,11 +2968,31 @@ app.post('/spend/me', validateApiKey, async (req: Request, res: Response) => {
       });
     }
 
+    let authorizationAmount: number | undefined;
+    if (isExternalWallet) {
+      if (!authorizationTxHash || typeof authorizationTxHash !== 'string') {
+        return spendValidationError(res, 'MISSING_WALLET_AUTHORIZATION', 'External wallet approval transaction is required');
+      }
+      const treasuryAddress = await getTreasuryWalletAddress();
+      if (!treasuryAddress) throw new Error('Treasury address is not configured');
+      const activeReserved = await SpendReservations.getActiveTotal(normalizedUid, userAddress);
+      const requiredAllowance = activeReserved + amountValue;
+      const allowance = Number(ethers.formatEther(await getTokenAllowance(userAddress, treasuryAddress)));
+      if (allowance < requiredAllowance) {
+        return spendValidationError(res, 'INSUFFICIENT_WALLET_AUTHORIZATION', 'External wallet approval is not confirmed or is too small', {
+          requiredAllowance, currentAllowance: allowance,
+        });
+      }
+      authorizationAmount = allowance;
+    }
+
     let reserved;
     try {
       reserved = await SpendReservations.reserve({
         uid: normalizedUid, walletAddress: userAddress, sessionId, providerId,
         amount: amountValue, onChainBalance,
+        authorizationTxHash: isExternalWallet ? authorizationTxHash : undefined,
+        authorizationAmount,
       });
     } catch (err) {
       const message = getErrorMessage(err);

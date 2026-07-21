@@ -134,6 +134,13 @@ reservation settlement from NEVERFLAT and forward it to the EMP. The required
 reservation-status endpoint and component polling are planned but not yet
 implemented.
 
+For an active external wallet, the component obtains a capped ERC-20 approval
+transaction from `POST /spend/reservation-approval-intent`, asks the wallet to
+submit it, waits for confirmation, and then creates the reservation. This lets
+NEVERFLAT perform delayed settlement after the CDR without asking for a second
+signature. A partial settlement can leave a residual allowance which should be
+revoked or replaced after settlement.
+
 ### CDR received/session closed
 
 When BEIA considers the session complete, pass `UNPLUGGED` again and remove

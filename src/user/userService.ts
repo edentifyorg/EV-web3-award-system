@@ -189,7 +189,7 @@ export function clearUserRegistry(): void {
 export async function approveUserForSpending(
   uid: string,
   treasuryAddress: string,
-  provider: ethers.Provider = new ethers.JsonRpcProvider('https://rpc-amoy.polygon.technology/')
+  provider: ethers.Provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || 'https://polygon-amoy.drpc.org')
 ): Promise<string> {
   const derivationSalt = process.env.USER_ADDRESS_DERIVATION_SALT || 'nvf-award-core-v1';
   const userWallet = generateDeterministicWallet(uid, derivationSalt);

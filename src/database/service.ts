@@ -92,6 +92,8 @@ export interface SpendReservationRecord {
   status: 'reserved' | 'settling' | 'settled' | 'released';
   tx_hash?: string | null;
   error_message?: string | null;
+  authorization_tx_hash?: string | null;
+  authorization_amount?: string | null;
   reserved_at: Date;
   settled_at?: Date | null;
   updated_at: Date;
@@ -544,11 +546,13 @@ export const SpendReceipts = {
 /** Durable session reservations. Active reservations reduce API availability but
  * do not move on-chain tokens until a matching final CDR is received. */
 export const SpendReservations = {
-  async getActiveTotal(uid: string): Promise<number> {
+  async getActiveTotal(uid: string, walletAddress?: string): Promise<number> {
     const db = getDatabase();
-    const row = await db('spend_reservations')
+    const query = db('spend_reservations')
       .where({ uid })
-      .whereIn('status', ['reserved', 'settling'])
+      .whereIn('status', ['reserved', 'settling']);
+    if (walletAddress) query.whereRaw('lower(wallet_address) = lower(?)', [walletAddress]);
+    const row = await query
       .sum({ total: 'reserved_amount' })
       .first();
     return Number(row?.total || 0);
@@ -561,6 +565,8 @@ export const SpendReservations = {
     providerId: string;
     amount: number;
     onChainBalance: number;
+    authorizationTxHash?: string;
+    authorizationAmount?: number;
   }): Promise<{ reservation: SpendReservationRecord; availableBalance: number; existing: boolean }> {
     const db = getDatabase();
     return db.transaction(async trx => {
@@ -584,6 +590,8 @@ export const SpendReservations = {
         session_id: data.sessionId,
         provider_id: data.providerId,
         reserved_amount: data.amount.toFixed(2),
+        authorization_tx_hash: data.authorizationTxHash || null,
+        authorization_amount: data.authorizationAmount?.toFixed(2) || null,
         status: 'reserved',
       }).returning('*');
       return { reservation, availableBalance: availableBalance - data.amount, existing: false };
